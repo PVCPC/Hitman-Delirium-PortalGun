@@ -2192,7 +2192,8 @@ void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
         // From the portal out to the eye: what's within 1.5 m of the eye (47 himself, over his shoulder) doesn't count.
         const float s_Far = (s_Eye - s_Near).Length();
 
-        if (RayCast(s_Near, s_Eye, p_Hitman, s_Hit, s_HitNormal) && (s_Hit - s_Near).Length() < s_Far - 1.5f) {
+        // ponytail: off; something invisible ~2.3 m in front of portals blocked it every time. Shown through walls now.
+        if (false && RayCast(s_Near, s_Eye, p_Hitman, s_Hit, s_HitNormal) && (s_Hit - s_Near).Length() < s_Far - 1.5f) {
             s_View.m_Why = std::format("blocked {:.2f} m from it", (s_Hit - s_Near).Length());
             continue;
         }

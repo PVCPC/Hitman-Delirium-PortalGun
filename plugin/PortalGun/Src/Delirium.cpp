@@ -640,7 +640,8 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     b.m_Name = p_Name;
     // The rig (names, parents) from the morpheme entity; the pose from what draws him (47: his own animator).
     void* s_Rig = Bones::Animator(p_Char);
-    b.m_Anim = p_Npc ? s_Rig : Bones::HitmanAnimator(static_cast<ZHitman5*>(p_Char));
+    // ponytail: 47's own animator (Bones::HitmanAnimator) gave a pose that isn't his mesh's (arms up), so the morpheme's.
+    b.m_Anim = s_Rig;
 
     // Not posed yet (the hook only sees it from its next frame): try again later.
     std::vector<Bones::SQV> s_Local, s_RigLocal;
@@ -838,10 +839,8 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
 
     nm_rig_take(b.m_Rig, b.m_Agent, b.m_Now.data(), nullptr, 0.f);
 
-    if (p_Npc)
-        nm_agent_partial(b.m_Agent, NM_PARTIAL_LEGS);
-    else
-        nm_agent_keyframe(b.m_Agent, "fb", 1);
+    // On its animation exactly until hit or killed (GTA IV's way); a free half-ragdoll walking it sent them flying.
+    nm_agent_keyframe(b.m_Agent, "fb", 1);
 
     Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Build == m_Wilma ? "Wilma" : "Homer", n,
         s_N);
@@ -872,9 +871,15 @@ void Delirium::Detach(Body& p_Body) {
 
 void Delirium::SetHitmanRagdoll(bool p_On) {
     m_HitmanRagdoll = p_On;
-    Body* b = Hitman();
 
-    if (!b || b->m_Ragdoll == p_On)
+    if (Body* b = Hitman())
+        SetRagdoll(*b, p_On);
+}
+
+void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
+    Body* b = &p_Body;
+
+    if (b->m_Ragdoll == p_On)
         return;
 
     b->m_Ragdoll = p_On;
@@ -892,7 +897,7 @@ void Delirium::SetHitmanRagdoll(bool p_On) {
         nm_agent_keyframe(b->m_Agent, "fb", 1);
     }
 
-    Logger::Info("[Delirium] 47 ragdoll {}.", p_On ? "on" : "off");
+    Logger::Info("[Delirium] {} ragdoll {}.", b->m_Name, p_On ? "on" : "off");
 }
 
 // Delirium on Hitman's NPCs: the nearest few near 47 get a body, the far, gone and out-of-mode ones lose theirs.
@@ -1070,20 +1075,12 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             continue;
 
         // A body: hit, it goes; stood up, back on its animation.
-        if (s_Body && !s_Body->m_Npc && s_What != "Stand up again")
-            SetHitmanRagdoll(true);
+        if (s_Body && s_What != "Stand up again")
+            s_Body->m_Npc ? SetRagdoll(*s_Body, true) : SetHitmanRagdoll(true);
 
         if (s_Body && s_What == "Stand up again") {
-            if (!s_Body->m_Npc) {
-                SetHitmanRagdoll(false);
-            }
-            else if (!s_Body->m_Now.empty()) {
-                Bones::Override(s_Body->m_Anim, {});
-                s_Body->m_Ragdoll = false;
-                nm_agent_set_dead(a, 0);
-                nm_rig_take(s_Body->m_Rig, a, s_Body->m_Now.data(), nullptr, 0.f);
-                nm_agent_partial(a, NM_PARTIAL_LEGS);
-            }
+            nm_agent_set_dead(a, 0);
+            s_Body->m_Npc ? SetRagdoll(*s_Body, false) : SetHitmanRagdoll(false);
 
             m_Line = std::format("{} is back on the animation.", *s_Name);
             continue;
@@ -1104,6 +1101,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         // ponytail: the game's own death ragdoll still takes the body over; detour ActivateRagdoll to keep NM's.
         if (b.m_Npc && !b.m_Dead && static_cast<ZActor*>(b.m_Char)->IsDead()) {
             b.m_Dead = true;
+            SetRagdoll(b, true);
             nm_agent_set_dead(b.m_Agent, 1);
         }
     }
@@ -1130,28 +1128,11 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     // NM's pose out onto the ragdolling ones.
     for (Body& b : m_Bodies) {
-        if (b.m_Npc) {
-            switch (nm_agent_partial_event(b.m_Agent)) {
-                case NM_PARTIAL_KNOCKED:
-                case NM_PARTIAL_FELL:
-                case NM_PARTIAL_DROPPED:
-                    b.m_Ragdoll = true;
-                    break;
-                case NM_PARTIAL_RESUMED:
-                case NM_PARTIAL_RECOVERED:
-                    b.m_Ragdoll = false;
-                    Bones::Override(b.m_Anim, {});
-                    break;
-                default:
-                    break;
-            }
-        }
-
         if (b.m_Ragdoll)
             WritePose(b);
 
-        // 47 ragdolling: he goes where his body goes (no walking off out of it).
-        if (!b.m_Npc && b.m_Ragdoll) {
+        // Ragdolling: the character goes where its body goes (no walking off out of it).
+        if (b.m_Ragdoll) {
             float s_Pos[3], s_Rot[4];
             nm_agent_get_part_transform(b.m_Agent, 0, s_Pos, s_Rot);
             SMatrix s_M = b.m_Spatial->GetObjectToWorldMatrix();
