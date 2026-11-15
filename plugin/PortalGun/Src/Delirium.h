@@ -188,7 +188,7 @@ private:
     std::mutex m_HitMutex;
     std::vector<void*> m_Hits;
     void SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facing);
-    std::vector<ZEntityRef> m_SpawnedNpcs; // deleted before the level goes (left, a replay crashed in their teardown)
+    std::vector<ZEntityRef> m_SpawnedNpcs; // left to the scene's teardown (deleting them first crashed it)
     bool m_WantClear = false;
     std::vector<std::pair<int, std::string>> m_WantFire; // target (0 = 47), action
 

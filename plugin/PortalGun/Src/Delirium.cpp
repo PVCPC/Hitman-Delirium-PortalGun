@@ -443,10 +443,8 @@ void Delirium::Clear() {
     m_Bodies.clear();
     m_HitmanRagdoll = false;
 
-    for (ZEntityRef& e : m_SpawnedNpcs)
-        if (e) // no Deactivate first: it nulls the actor's animated actor and the scene's teardown then crashed on it
-            Functions::ZEntityManager_DeleteEntity->Call(Globals::EntityManager, e, {});
-
+    // Spawned NPCs are the scene's children: its teardown removes them. Deleting them here nulled their animated
+    // actor (ZActor+0x10B8) and the teardown then read it (HITMAN3+14e222, the restart crash with spawned NPCs).
     m_SpawnedNpcs.clear();
     {
         std::scoped_lock s_Owned(g_OwnedMutex);
@@ -1529,6 +1527,50 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     // exactly on its bone, no length fight (shaking) or baked-in pelvis height (floating). REAL: one world, scale 1.
     NmBuild* s_Base = p_Female && m_Wilma ? m_Wilma : m_Build;
     s_Lap("check");
+    // Hitman has three spine bones, Homer four spine parts (spine>7 spine1>8 spine2>9, part 10 none): the fit made
+    // his two lower spine parts long and fat (radius 0.12 > 0.20, Billy's huge belly) and the upper two tiny. Spine
+    // joints 8-10 go where Homer has them along this man's own spine (pelvis-side joint 7 to the neck's, 11), so
+    // every spine part keeps Homer's share of its length and so his thickness.
+    {
+        float s_C[5][3], s_Q[4];
+
+        for (int k = 0; k < 5; ++k)
+            nm_build_part_frame(s_Base, 7 + k, s_C[k], s_Q);
+
+        float s_Homer[5] = {0.f};
+
+        for (int k = 1; k < 5; ++k)
+            s_Homer[k] = s_Homer[k - 1] + (V(s_C[k]) - V(s_C[k - 1])).Length();
+
+        // This man's spine as a line through his own joints 7, 8, 9, 11 (10 is made up), by length along it.
+        const SVector3 s_P[4] = {V(&s_Joints[7 * 3]), V(&s_Joints[8 * 3]), V(&s_Joints[9 * 3]), V(&s_Joints[11 * 3])};
+        float s_Len[4] = {0.f};
+
+        for (int k = 1; k < 4; ++k)
+            s_Len[k] = s_Len[k - 1] + (s_P[k] - s_P[k - 1]).Length();
+
+        if (s_Homer[4] > 0.05f && s_Len[3] > 0.05f) {
+            SVector3 s_New[3];
+
+            for (int k = 1; k <= 3; ++k) {
+                const float d = s_Len[3] * s_Homer[k] / s_Homer[4];
+                int e = 1;
+
+                while (e < 3 && s_Len[e] < d)
+                    ++e;
+
+                const float t = std::clamp((d - s_Len[e - 1]) / std::max(1e-4f, s_Len[e] - s_Len[e - 1]), 0.f, 1.f);
+                s_New[k - 1] = s_P[e - 1] + (s_P[e] - s_P[e - 1]) * t;
+            }
+
+            for (int k = 0; k < 3; ++k) {
+                s_Joints[(8 + k) * 3] = s_New[k].x;
+                s_Joints[(8 + k) * 3 + 1] = s_New[k].y;
+                s_Joints[(8 + k) * 3 + 2] = s_New[k].z;
+            }
+        }
+    }
+
     // Homer as the Playroom has him (every Custom slider 1, Pelican): width 0.65 thinned his arms and shoulders too.
     b.m_Build = nm_build_fit_sized(s_Base, s_Joints, NM_SIZE_REAL);
 
