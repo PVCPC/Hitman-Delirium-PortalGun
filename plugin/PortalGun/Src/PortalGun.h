@@ -130,6 +130,7 @@ private:
     void GivePortalGun();
     bool IsOurGun(const ZHM5ItemWeapon* p_Weapon) const;
 
+    bool m_CornerPicture = false;
     DECLARE_PLUGIN_DETOUR(PortalGun, void, OnClearScene, ZEntitySceneContext* th, bool p_FullyUnloadScene);
     DECLARE_PLUGIN_DETOUR(PortalGun, bool, ZHM5ItemWeapon_FireProjectiles, ZHM5ItemWeapon* th, bool bMayStartSound);
     DECLARE_PLUGIN_DETOUR(PortalGun, bool, ZHM5ItemWeapon_IsFiring, IFirearm* th);

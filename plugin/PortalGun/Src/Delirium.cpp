@@ -1435,11 +1435,16 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     m_Aim = p_Aim;
     Bones::Tick();
 
-    for (Body& b : m_Bodies)
-        if (b.m_Npc && GameTook(b.m_Char) && !b.m_Dead) {
-            b.m_Shot = true;
-            Logger::Info("[Delirium] {}: shot (the game ragdolls it underneath; Delirium's body takes the hit).", b.m_Name);
-        }
+    // ponytail: a kill is the game's ragdoll (it takes the mesh; blocking it crashed). Delirium's death needs the
+    // game's ragdoll driven from NM (FOLLOW mode on Glacier's rigid bodies).
+    std::erase_if(m_Bodies, [&](Body& b) {
+        if (!b.m_Npc || !GameTook(b.m_Char))
+            return false;
+
+        Logger::Info("[Delirium] {}: the game ragdolled it (killed); Delirium lets it go.", b.m_Name);
+        Detach(b);
+        return true;
+    });
 
     UpdateCripple();
 

@@ -30,6 +30,7 @@ namespace Bones {
 
     // A new game frame (passes are counted per frame).
     void Tick();
+    std::vector<std::string> NamesUncached(const uint8_t* p_Data, int p_Bones, std::string& p_Where);
 
     // Its bones' parents (-1 for the first), checked; empty if they can't be found.
     std::vector<int32_t> Parents(void* p_Animator, int p_Bones);

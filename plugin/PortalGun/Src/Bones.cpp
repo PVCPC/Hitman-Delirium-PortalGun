@@ -334,8 +334,25 @@ std::vector<std::string> Bones::Names(void* p_Animator, int p_Bones, std::string
     if (!s_Data || p_Bones <= 0)
         return {};
 
-    const auto s_Name = [](const char* c, size_t p_Max, size_t p_Len) -> std::string {
-        if (!Readable(c, p_Max))
+    // One rig, one list (every NPC in the same skeleton shares its bone data).
+    static std::unordered_map<const void*, std::pair<std::vector<std::string>, std::string>> s_Cache;
+
+    if (const auto it = s_Cache.find(s_Data); it != s_Cache.end() && static_cast<int>(it->second.first.size()) == p_Bones) {
+        p_Where = it->second.second;
+        return it->second.first;
+    }
+
+    std::vector<std::string> s_Found = NamesUncached(s_Data, p_Bones, p_Where);
+
+    if (!s_Found.empty())
+        s_Cache[s_Data] = {s_Found, p_Where};
+
+    return s_Found;
+}
+
+std::vector<std::string> Bones::NamesUncached(const uint8_t* s_Data, int p_Bones, std::string& p_Where) {
+    const auto s_Name = [](const char* c, size_t p_Max, size_t p_Len, bool p_Checked = false) -> std::string {
+        if (!p_Checked && !Readable(c, p_Max))
             return {};
 
         size_t n = 0;
@@ -363,7 +380,8 @@ std::vector<std::string> Bones::Names(void* p_Animator, int p_Bones, std::string
             std::vector<std::string> s_Out;
 
             for (int i = 0; i < p_Bones; ++i) {
-                std::string s = s_Name(reinterpret_cast<const char*>(p + i * s_Stride + s_At), 34, 0);
+                std::string s = s_Name(reinterpret_cast<const char*>(p + i * s_Stride + s_At),
+                    std::min<size_t>(34, s_Stride * p_Bones - i * s_Stride - s_At), 0, true);
 
                 if (s.empty())
                     break;

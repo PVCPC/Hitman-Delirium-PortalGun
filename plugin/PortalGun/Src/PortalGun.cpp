@@ -680,6 +680,7 @@ void PortalGun::DrawPortalTab() {
         dp_set_rect(g_Square ? 1 : 0);
     ImGui::Checkbox("Playroom portal rims", &m_PlayroomRims);
     ImGui::Checkbox("See-through portals", &m_SeeThrough);
+    ImGui::Checkbox("Corner picture (if the portal views go dark or white; next level load)", &m_CornerPicture);
     ImGui::SameLine();
     ImGui::Checkbox("Show portal cameras", &m_ShowCameras);
     ImGui::SliderFloat("Volume", &m_Volume, 0.f, 1.f, "%.2f");
@@ -2312,6 +2313,7 @@ void PortalGun::SpawnViews() {
         s_Json.replace(s_Json.find(p_Key), 3, std::to_string(p_Value));
     };
     s_Put("@W@", std::max(64u, static_cast<uint32_t>(m_ScreenW * 0.5f)));
+    s_Put("@PIP@", m_CornerPicture ? 1u : 0u);
     s_Put("@H@", std::max(64u, static_cast<uint32_t>(m_ScreenH * 0.5f)));
 
     if (!m_ViewFactory && !SDK()->LoadQnEntity(ZString(s_Json), m_ViewBlueprint, m_ViewFactory)) {

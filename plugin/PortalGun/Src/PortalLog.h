@@ -47,13 +47,11 @@ namespace PortalLog {
     void Info(std::format_string<Args...> p_Format, Args&&... p_Args) {
         const std::string s_Line = std::format(p_Format, std::forward<Args>(p_Args)...);
         Write("INFO", s_Line);
-        ::Logger::Info("{}", s_Line);
     }
 
     template <typename... Args>
     void Debug(std::format_string<Args...> p_Format, Args&&... p_Args) {
         const std::string s_Line = std::format(p_Format, std::forward<Args>(p_Args)...);
         Write("DEBUG", s_Line);
-        ::Logger::Debug("{}", s_Line);
     }
 }
