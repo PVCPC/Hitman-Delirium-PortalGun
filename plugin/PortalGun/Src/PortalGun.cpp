@@ -587,7 +587,7 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
     GetWindowThreadProcessId(GetForegroundWindow(), &s_Fg);
     const bool s_RightDown = !m_MenuOpen && s_Fg == GetCurrentProcessId() && (GetAsyncKeyState(VK_RBUTTON) & 0x8000);
 
-    if (((s_AimHeld && !m_AimWasHeld) || (s_RightDown && !m_RightWasDown)) && s_GunInHand)
+    if (s_RightDown && !m_RightWasDown && s_GunInHand)
         m_RequestOrange = true;
 
     m_RightWasDown = s_RightDown;
@@ -607,6 +607,9 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
         m_RequestCube = false;
         SpawnCube(s_PlayerTrans);
     }
+
+    if (m_Delirium.HitmanDown())
+        m_RequestBlue = m_RequestOrange = false;
 
     if (m_RequestBlue) {
         m_RequestBlue = false;
@@ -1160,7 +1163,7 @@ bool PortalGun::TryTeleport(Portal& p_In, Portal& p_Out, ZSpatialEntity* p_Hitma
     const float4 s_Local = s_InTrans.Inverse().WVectorTransform(float4(s_Probe.x, s_Probe.y, s_Probe.z, 1.f));
 
     const SVector3 s_Local3 = ToVec3(s_Local);
-    const bool s_Inside = InsideOval(s_Local3) && s_Local.y < c_TriggerDepth && s_Local.y > -c_TriggerBehind;
+    const bool s_Inside = InsideOval(s_Local3, 0.25f) && s_Local.y < c_TriggerDepth && s_Local.y > -c_TriggerBehind;
 
     const bool s_HadPrev = p_In.m_HasPrevSide;
     const bool s_WasInside = p_In.m_WasInside;
@@ -1193,11 +1196,6 @@ bool PortalGun::TryTeleport(Portal& p_In, Portal& p_Out, ZSpatialEntity* p_Hitma
     // Portal keeps the player's speed and turns his velocity with the portal pair.
     const SVector3 s_InVel = m_Flying ? m_FlyVel : m_WalkVel;
 
-    // With his Delirium body: he goes in as a ragdoll and the body itself goes through (the Playroom's way).
-    if (m_Delirium.Dive(s_InVel + ToVec3(s_InTrans.YAxis) * -1.5f)) {
-        m_Cooldown = c_TeleportCooldown;
-        return true;
-    }
     SVector3 s_OutVel = MapDirection(s_InVel, s_InTrans, p_Out.m_Transform);
 
     SMatrix s_NewTrans = ExitTransform(p_PlayerTrans, s_InTrans, p_Out.m_Transform);
@@ -2173,6 +2171,10 @@ void PortalGun::SpawnViews() {
             if (const auto s_Ent = s_Bp->GetSubEntity(s_View.m_Root.m_pObj, s_Idx))
                 s_View.m_Texture = TEntityRef<ZRenderDestinationTextureEntity>(ZEntityRef(s_Ent));
 
+        if (const int s_Idx = s_Bp->GetSubEntityIndex(0xfeed678791f1b3e1); s_Idx != -1)
+            if (const auto s_Ent = s_Bp->GetSubEntity(s_View.m_Root.m_pObj, s_Idx))
+                s_View.m_Tablet = ZEntityRef(s_Ent).QueryInterface<ZSpatialEntity>();
+
         if (!s_View.m_Camera || !s_View.m_Texture) {
             Logger::Error("[PortalGun] See-through portals: the camera or its texture is missing.");
             m_ViewsFailed = true;
@@ -2225,6 +2227,15 @@ void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
 
         if (!s_On)
             continue;
+
+        // The texture's tablet inside 47's chest: in view (so the camera renders, it was black at z -999), hidden by him.
+        // ponytail: if the tablet pokes out of him, scale it down or find the render destination's own always-render flag.
+        if (s_View.m_Tablet)
+            if (const auto s_Me = p_Hitman.QueryInterface<ZSpatialEntity>()) {
+                SMatrix s_M = s_Me->GetObjectToWorldMatrix();
+                s_M.Trans = s_M.Trans + s_M.ZAxis * 1.3f;
+                s_View.m_Tablet->SetObjectToWorldMatrixFromEditor(s_M);
+            }
 
         const Portal& s_In = i == 0 ? m_Blue : m_Orange;
         const Portal& s_Out = i == 0 ? m_Orange : m_Blue;

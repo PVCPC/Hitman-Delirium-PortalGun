@@ -2,6 +2,8 @@
 // gta4nm.dll is loaded from mods/Delirium on first use (delay-loaded), with the NM data the user's GTA IV gave.
 #pragma once
 
+#include <unordered_map>
+
 #include <delirium_portal.h>
 
 #include <Glacier/ZMath.h>
@@ -40,8 +42,6 @@ public:
     // The linked pair (null: not both open), for ragdolls going through and the holes in the ground.
     void SetPortals(const DpFrame* p_Frames);
 
-    // 47 into a portal: he goes in as a ragdoll at this speed (false: he has no body, teleport him).
-    bool Dive(const SVector3& p_Vel);
 
     // 47 is down (ragdolled or getting up): his own movement is off.
     bool HitmanDown();
@@ -75,6 +75,8 @@ private:
         std::vector<Bones::SQV> m_Written; // the ragdoll's last pose
         float m_Blend = 0.f; // s left blending back to the animation
         bool m_GettingUp = false; // the learned get-up running
+        float m_GetUpTime = 0.f;
+        bool m_HighFall = false;
         SMatrix m_HeldRot; // its entity as it went down (held there, xy following the body)
         float m_HeldZ = 0.f;
         std::vector<int> m_Bones;      // Hitman bone of each rig bone (the pelvis and everything under it)
@@ -148,6 +150,6 @@ private:
     size_t m_PedsDrawn = 0;
     std::vector<SVector3> m_Lines; // skeleton lines, in pairs
     std::vector<std::string> m_Names; // the targets after 47, for the menu
-    float m_Accum = 0.f;
+    std::unordered_map<NmAgent*, float> m_LastGround; // the last ground under each body
     float m_GroundTimer = 0.f;
 };

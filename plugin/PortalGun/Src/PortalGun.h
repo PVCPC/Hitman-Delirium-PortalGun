@@ -51,6 +51,7 @@ struct PortalView {
     ZEntityRef m_Root;
     TEntityRef<ZCameraEntity> m_Camera;
     TEntityRef<ZRenderDestinationTextureEntity> m_Texture;
+    ZSpatialEntity* m_Tablet = nullptr; // the prop showing the texture: Glacier only renders a texture someone can see
     // Whether to draw it this frame (both portals up, 47's camera in front of it and nothing in the way).
     bool m_Show = false;
     std::string m_Why; // why it is or isn't shown (logged when it changes)

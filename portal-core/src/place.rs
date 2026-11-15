@@ -87,7 +87,7 @@ fn blocked_along(w: &dyn World, from: Vec3, to: Vec3, n: Vec3) -> Option<f32> {
     let dir = (to - from) / len;
     let ok = |t: f32| surface_at(w, from + dir * t, n);
     let mut best = obstruction(w, from, to, n);
-    let step = len * 0.05;
+    let step = len * 0.1; // fewer rays: a fit sliding along cast hundreds (a hitch per shot)
     let mut good = 0.0f32;
     let mut s = step;
     while s <= len + 1e-6 {
@@ -95,7 +95,7 @@ fn blocked_along(w: &dyn World, from: Vec3, to: Vec3, n: Vec3) -> Option<f32> {
         if !ok(t) {
             let (mut lo, mut hi) = (good, t);
             for _ in 0..100 {
-                if hi - lo <= 0.01 * U {
+                if hi - lo <= 0.25 * U {
                     break;
                 }
                 let mid = 0.5 * (lo + hi);

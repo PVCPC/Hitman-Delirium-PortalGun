@@ -262,6 +262,7 @@ bool Delirium::Start() {
 
     nm_set_step_limit(0);
     m_World = nm_world_create();
+    nm_set_step_limit(0); // the Playroom's default: balance keeps stepping as long as it takes
 
     for (int i = 0; i < nm_build_part_count(m_Build); ++i) {
         float s_Mass, s_Radius, s_Half;
@@ -361,14 +362,20 @@ void Delirium::UpdateGround(const Ray& p_Ray) {
         std::vector<uint32_t> s_Tris;
         const float s_Half = c_Spacing * (c_N - 1) * 0.5f;
 
+        const auto s_Last = m_LastGround.try_emplace(s_Agents[p], s_Pos[2] - 1.f).first;
+
         for (int y = 0; y < c_N; ++y) {
             for (int x = 0; x < c_N; ++x) {
                 const SVector3 s_Top(s_Pos[0] - s_Half + x * c_Spacing, s_Pos[1] - s_Half + y * c_Spacing, s_Pos[2] + 1.f);
                 SVector3 s_Hit, s_Normal;
-                float s_Z = s_Pos[2] - 1.f;
+                float s_Z = s_Last->second;
 
-                if (p_Ray(s_Top, s_Top - SVector3(0.f, 0.f, 4.f), s_Hit, s_Normal))
+                if (p_Ray(s_Top, s_Top - SVector3(0.f, 0.f, 4.f), s_Hit, s_Normal)) {
                     s_Z = s_Hit.z;
+
+                    if (x == c_N / 2 && y == c_N / 2)
+                        s_Last->second = s_Z;
+                }
 
                 s_Verts.insert(s_Verts.end(), {s_Top.x, s_Top.y, s_Z});
             }
@@ -945,19 +952,6 @@ bool Delirium::HitmanDown() {
     return b && (b->m_Ragdoll || b->m_Blend > 0.f);
 }
 
-bool Delirium::Dive(const SVector3& p_Vel) {
-    Body* b = Hitman();
-
-    if (!b || b->m_Ragdoll)
-        return b != nullptr;
-
-    SetHitmanRagdoll(true);
-    const float s_V[3] = {p_Vel.x, p_Vel.y, p_Vel.z};
-    nm_agent_add_velocity(b->m_Agent, s_V);
-    Logger::Info("[Delirium] 47 into the portal as a ragdoll at {:.1f} m/s.", p_Vel.Length());
-    return true;
-}
-
 void Delirium::SetHitmanRagdoll(bool p_On) {
     m_HitmanRagdoll = p_On;
 
@@ -976,6 +970,9 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
     if (p_On) {
         nm_agent_keyframe(b->m_Agent, "fb", 0);
         nm_agent_collide_agents(b->m_Agent, 1);
+        b->m_HighFall = false;
+        b->m_GettingUp = false;
+        b->m_Dead ? nm_agent_task_relax(b->m_Agent, -1.f, -1.f) : nm_agent_task_balance(b->m_Agent, m_World, "*", nullptr);
         const SMatrix s_M = b->m_Spatial->GetObjectToWorldMatrix();
         b->m_HeldZ = s_M.Trans.z;
         b->m_HeldRot = s_M;
@@ -1233,7 +1230,8 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     }
 
     // NM's own 60 steps a second, at most 4 a frame.
-    m_Accum = std::min(m_Accum + p_Dt, 4.f * c_Step);
+    const int s_Steps = std::clamp(static_cast<int>(std::ceil(p_Dt / c_Step)), 1, 4);
+    const float s_Dt = std::min(p_Dt, 4.f * c_Step) / s_Steps;
     std::vector<NmAgent*> s_Agents;
 
     for (const Ped& s_Ped : m_Peds)
@@ -1242,9 +1240,8 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     for (const Body& s_Body : m_Bodies)
         s_Agents.push_back(s_Body.m_Agent);
 
-    while (m_Accum >= c_Step) {
-        m_Accum -= c_Step;
-        nm_world_step_agents(m_World, s_Agents.data(), static_cast<int>(s_Agents.size()), c_Step, 0);
+    for (int i = 0; i < s_Steps && s_Dt > 0.f; ++i) {
+        nm_world_step_agents(m_World, s_Agents.data(), static_cast<int>(s_Agents.size()), s_Dt, 0);
     }
 
     // Ragdolls through the portals, the Playroom's way (portal.rs funnel_agent, transit): Portal 2's funnel steers a
@@ -1322,7 +1319,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
         // Lying still: Delirium's learned get-up (the Playroom's, on his own muscles); stood up, back on the animation.
         if (b.m_GettingUp) {
-            if (!nm_agent_learned_getup_running(b.m_Agent)) {
+            if (!nm_agent_learned_getup_running(b.m_Agent) || (b.m_GetUpTime += p_Dt) > 5.f) {
                 b.m_GettingUp = false;
                 Logger::Info("[Delirium] {} is up.", b.m_Name);
                 b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
@@ -1331,11 +1328,22 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             continue;
         }
 
+        if (!b.m_HighFall) {
+            float s_C[3], s_V[3];
+            nm_agent_get_com(b.m_Agent, s_C, s_V);
+
+            if (s_V[2] < -6.f) {
+                b.m_HighFall = true;
+                nm_agent_task_high_fall(b.m_Agent, m_World, "*", b.m_Npc ? 0 : 1);
+            }
+        }
+
         if (nm_agent_should_get_up(b.m_Agent, 1.f) == 1) {
             const std::string s_Net = (m_Dir / "getup.net").string();
 
             if (nm_agent_learned_getup(b.m_Agent, s_Net.c_str()) >= 0 && nm_agent_learned_getup_running(b.m_Agent)) {
                 b.m_GettingUp = true;
+                b.m_GetUpTime = 0.f;
                 Logger::Info("[Delirium] {} gets up.", b.m_Name);
             }
             else {
