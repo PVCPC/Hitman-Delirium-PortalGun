@@ -1677,7 +1677,37 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
             const auto s_G = m_LastGround.find(b->m_Agent);
             s_M.Trans.z = s_G != m_LastGround.end() ? s_G->second : b->m_HeldZ;
             b->m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
-            b->m_Written.clear();
+
+            // The blend into the animation starts from the lying pose: its hips put back under the new root (they were
+            // worked out against the old one), so the NPC rises out of where it lay instead of popping upright.
+            const size_t n = b->m_Bones.size();
+            const int s_H = b->m_PoseHips;
+
+            if (s_H >= 0 && s_H < static_cast<int>(n) && b->m_PoseB.size() == n * 4 + 3 &&
+                b->m_Written.size() == b->m_Local.size()) {
+                std::vector<float> s_W;
+                Fk(b->m_Local, b->m_Parents, FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis),
+                    SVector3(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z), g_Conj, s_W);
+                const int s_Bone = b->m_Bones[s_H], s_Parent = b->m_Parents[s_Bone];
+                Q s_Pq = FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis);
+                SVector3 s_Pp(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z);
+
+                if (s_Parent >= 0) {
+                    const float* w = &s_W[s_Parent * 7];
+                    s_Pq = {w[3], w[4], w[5], w[6]};
+                    s_Pp = V(w);
+                }
+
+                const float* h = &b->m_PoseB[s_H * 4];
+                const Q s_Lq = Norm(Mul(Conj(s_Pq), Q {h[0], h[1], h[2], h[3]}));
+                const SVector3 s_Lp = Rot(Conj(s_Pq), V(&b->m_PoseB[n * 4]) - s_Pp);
+                Bones::SQV& l = b->m_Written[s_Bone];
+                l.q[0] = g_Conj ? -s_Lq.x : s_Lq.x, l.q[1] = g_Conj ? -s_Lq.y : s_Lq.y, l.q[2] = g_Conj ? -s_Lq.z : s_Lq.z;
+                l.q[3] = s_Lq.w;
+                l.p[0] = s_Lp.x, l.p[1] = s_Lp.y, l.p[2] = s_Lp.z;
+            }
+            else
+                b->m_Written.clear();
         }
 
         b->m_Blend = b->m_Written.empty() ? 0.f : c_GetUp;
@@ -2170,17 +2200,6 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             continue;
         }
 
-        // Lying still: Delirium's learned get-up (the Playroom's, on his own muscles); stood up, back on the animation.
-        if (b.m_GettingUp) {
-            if (!nm_agent_learned_getup_running(b.m_Agent) || (b.m_GetUpTime += p_Dt) > 9.f) {
-                b.m_GettingUp = false;
-                Logger::Info("[Delirium] {} is up.", b.m_Name);
-                b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
-            }
-
-            continue;
-        }
-
         if (!b.m_HighFall) {
             float s_C[3], s_V[3];
             nm_agent_get_com(b.m_Agent, s_C, s_V);
@@ -2191,18 +2210,11 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             }
         }
 
+        // Up again with Hitman's own recovery (Billy: never the learned get-up / getup.net). SetRagdoll(false) puts an
+        // NPC where its body lies, facing the way it got up, and deactivates the game's ragdoll.
         if (nm_agent_should_get_up(b.m_Agent, 1.f) == 1) {
-            const std::string s_Net = (m_Dir / "getup.net").string();
-
-            if (nm_agent_learned_getup(b.m_Agent, s_Net.c_str()) >= 0 && nm_agent_learned_getup_running(b.m_Agent)) {
-                b.m_GettingUp = true;
-                b.m_GetUpTime = 0.f;
-                Logger::Info("[Delirium] {} gets up.", b.m_Name);
-            }
-            else {
-                Logger::Info("[Delirium] {} gets up (no learned get-up: {}).", b.m_Name, LastError());
-                b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
-            }
+            Logger::Info("[Delirium] {} gets up.", b.m_Name);
+            b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
         }
     }
 

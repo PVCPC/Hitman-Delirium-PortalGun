@@ -92,7 +92,7 @@ private:
         bool m_PortalHad = false;
         std::vector<Bones::SQV> m_Written; // the ragdoll's last pose
         float m_Blend = 0.f; // s left blending back to the animation
-        bool m_GettingUp = false; // the learned get-up running
+        bool m_GettingUp = false; // (unused since the learned get-up went)
         float m_GetUpTime = 0.f;
         bool m_HighFall = false;
         std::vector<float> m_PoseA, m_PoseB; // the last two stepped poses (nm_rig_pose)

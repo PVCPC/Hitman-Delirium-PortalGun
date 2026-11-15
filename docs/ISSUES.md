@@ -10,7 +10,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 1 | 47's Homer doesn't line up with his model (A-pose, clipping into the ground) | built: inverted quaternions + fitted body. Billy: "good step forward, not quite" |
 | 2 | 47 shakes, worst when moving while ragdolled | built: movement blocked while down; whole 1/60 steps, pose drawn between the last two (no 60 Hz judder) |
 | 3 | 47's head twists a lot when ragdolled | open: neck/head bone map now logged, check next run |
-| 4 | 47 gets up with no animation (snaps upright); learned get-up doesn't work on him | partly: blend 1.2 s; NPCs now face the way the get-up ends (modding guide: feet if on the back, head if on the front). Real fix: Hitman's own get-up clip (no fitted-body get-up in the SDK yet, Pelican) |
+| 4 | Get-up: snaps upright; learned get-up wrong | Learned get-up (getup.net) removed entirely (Billy). NPCs: Hitman ragdoll deactivated where the body lies, mesh blends 1.2 s from the lying pose (hips re-rooted). Hitman's own clips (Impacts|Ambient_Impact_GetUp_Back/Stomake/LeftSide/RightSide) found registered at 0x1403c7b..; how to request them not found yet. |
 | 5 | Player can keep moving while ragdolled | built (same as 2) |
 | 6 | NPC models twist and contort around their Homer body | built: bind-pose fit; parts baked on the bind pose; only main-chain bones drive parts (twist/roll/cloth/holster/face/extra bones left at rest); one bone-turn rule for all; rig check + map logged per NPC; lying bodies with a part over 5 m/s logged |
 | 7 | NPC Homers hover above their bodies, shake violently | built: ground rays ignore characters; NM stepped every frame |
