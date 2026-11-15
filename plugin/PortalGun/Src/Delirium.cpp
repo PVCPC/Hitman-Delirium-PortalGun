@@ -1138,7 +1138,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
             float s_P[3], s_R[4], s_AP[3], s_AR[4];
             const float s_Zero[3] = {0.f, 0.f, 0.f};
 
-            if (!nm_build_part_frame(b.m_Build, i, s_P, s_R))
+            if (nm_build_part_frame(b.m_Build, i, s_P, s_R) != 0) // 0 is success (this skipped every part: no bake)
                 continue;
 
             nm_agent_get_part_transform(b.m_Agent, i, s_AP, s_AR);
@@ -1150,8 +1150,11 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
             nm_agent_set_part_state(b.m_Agent, i, s_P, s_R, s_Zero, s_Zero);
         }
 
-        Logger::Info("[Delirium] {}: parts put on the bind pose before the rig (furthest was part {}, {:.2f} m off).",
-            p_Name, s_WorstPart, s_Worst);
+        // Pelican's check: the upper arm on the A-pose bind reads ~1.0 of its range; ~0.4 means the parts aren't on it.
+        float s_Ang[3];
+        const float s_Arm = nm_agent_get_joint_angle(b.m_Agent, 14, s_Ang);
+        Logger::Info("[Delirium] {}: parts put on the bind pose before the rig (furthest was part {}, {:.2f} m off; "
+            "upper arm at {:.2f} of its range).", p_Name, s_WorstPart, s_Worst, s_Arm);
     }
 
     s_Lap("agent");
