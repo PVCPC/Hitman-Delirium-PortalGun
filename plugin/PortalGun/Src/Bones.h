@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 class ZHM5BaseCharacter;
@@ -22,6 +23,15 @@ namespace Bones {
 
     // Its bones' parents (-1 for the first), checked; empty if they can't be found.
     std::vector<int32_t> Parents(void* p_Animator, int p_Bones);
+
+    // The engine's world matrix for it (bone 0's parent) as axes and place; p_Layout 44 or 43 (rows). False: none.
+    bool World(void* p_Animator, float* p_X, float* p_Y, float* p_Z, float* p_T, int& p_Layout);
+
+    // Its bones' names, found by a checked scan of its bone data (p_Where says where); empty if not found.
+    std::vector<std::string> Names(void* p_Animator, int p_Bones, std::string& p_Where);
+
+    // Its bind pose (under each parent), found the same way; empty if not found.
+    std::vector<SQV> BindPose(void* p_Animator, int p_Bones, std::string& p_Where);
 
     // Poses it with this from now on (same bone count as Read's); empty: its animation again.
     void Override(void* p_Animator, std::vector<SQV> p_Local);

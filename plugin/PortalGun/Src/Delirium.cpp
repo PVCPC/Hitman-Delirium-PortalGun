@@ -92,34 +92,6 @@ namespace {
         return Norm(q);
     }
 
-    // Hitman's bone (BoneId_Enum, its standard Biped rig) to NM's part, -1 for none.
-    // ponytail: by index, as the SDK's bone ids are; by name if an outfit's rig ever has them in another order.
-    int PartOf(int b) {
-        switch (b) {
-            case 1: return 0;   // pelvis
-            case 8: return 1;   // left thigh, calf, foot
-            case 12: return 2;
-            case 13: return 3;
-            case 16: return 4;  // right thigh, calf, foot
-            case 20: return 5;
-            case 21: return 6;
-            case 2: return 7;   // spine, spine 1, spine 2
-            case 3: return 8;
-            case 4: return 9;
-            case 5: return 11;  // neck
-            case 7: return 12;  // head
-            case 24: return 13; // left clavicle, upper arm, forearm, hand
-            case 25: return 14;
-            case 29: return 15;
-            case 33: return 16;
-            case 49: return 17; // right clavicle, upper arm, forearm, hand
-            case 50: return 18;
-            case 54: return 19;
-            case 58: return 20;
-            default: return -1;
-        }
-    }
-
     float Facing(const SVector3& p_Left, const SVector3& p_Right) {
         const SVector3 r = p_Right - p_Left;
         return std::atan2(r.x, -r.y); // forward = up x right
@@ -489,14 +461,39 @@ Delirium::Body* Delirium::Hitman() {
     return nullptr;
 }
 
+// Bone 0's parent: the world matrix the engine poses it with (else its spatial entity's).
+void Delirium::Root(Body& p_Body, float* p_Turn, SVector3& p_P) {
+    Q& p_Q = *reinterpret_cast<Q*>(p_Turn);
+    float x[3], y[3], z[3], t[3];
+    int s_Layout = 0;
+
+    if (Bones::World(p_Body.m_Anim, x, y, z, t, s_Layout)) {
+        p_Q = FromAxes(float4(x[0], x[1], x[2], 0.f), float4(y[0], y[1], y[2], 0.f), float4(z[0], z[1], z[2], 0.f));
+        p_P = SVector3(t[0], t[1], t[2]);
+    }
+    else {
+        const SMatrix s_M = p_Body.m_Spatial->GetObjectToWorldMatrix();
+        p_Q = FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis);
+        p_P = SVector3(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z);
+    }
+
+    if (p_Body.m_Layout != s_Layout) {
+        p_Body.m_Layout = s_Layout;
+        const SMatrix s_M = p_Body.m_Spatial->GetObjectToWorldMatrix();
+        Logger::Info("[Delirium] {}: world {} ({:.2f} {:.2f} {:.2f}; its entity at {:.2f} {:.2f} {:.2f}).", p_Body.m_Name,
+            s_Layout == 44 ? "4x4 from the engine" : s_Layout == 43 ? "4x3 from the engine" : "from its entity", p_P.x, p_P.y,
+            p_P.z, s_M.Trans.x, s_M.Trans.y, s_M.Trans.z);
+    }
+}
+
 // Every bone's world frame from the animation's pose this frame (parents first, bone 0 under the character's object).
 bool Delirium::Posed(Body& p_Body) {
     if (!Bones::Read(p_Body.m_Anim, p_Body.m_Local) || p_Body.m_Local.size() != p_Body.m_Parents.size())
         return false;
 
-    const SMatrix s_M = p_Body.m_Spatial->GetObjectToWorldMatrix();
-    const Q s_ObjQ = FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis);
-    const SVector3 s_ObjP(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z);
+    Q s_ObjQ;
+    SVector3 s_ObjP;
+    Root(p_Body, &s_ObjQ.x, s_ObjP);
     const size_t n = p_Body.m_Local.size();
     p_Body.m_World.resize(n * 7);
 
@@ -549,9 +546,7 @@ void Delirium::WritePose(Body& p_Body) {
         s_Pp = V(w);
     }
     else {
-        const SMatrix s_M = p_Body.m_Spatial->GetObjectToWorldMatrix();
-        s_Pq = FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis);
-        s_Pp = SVector3(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z);
+        Root(p_Body, &s_Pq.x, s_Pp);
     }
 
     const float* h = &s_Out[s_Hips * 4];
@@ -589,17 +584,50 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         return false;
     }
 
-    // The rig: the pelvis and everything under it, parents first (Hitman's own order).
+    // Its bones by name (Hitman's rig is its own: 233 bones in the suit, 231 in a disguise).
+    std::string s_Where;
+    const std::vector<std::string> s_Names = Bones::Names(b.m_Anim, n, s_Where);
+    static bool s_Dumped = false;
+
+    if (!s_Dumped) {
+        s_Dumped = true;
+        std::string s_List;
+
+        for (int i = 0; i < n; ++i)
+            s_List += std::format("{}:{}<{} ", i, i < static_cast<int>(s_Names.size()) ? s_Names[i] : "?", b.m_Parents[i]);
+
+        Logger::Info("[Delirium] {}'s rig ({} bones; names {}): {}", p_Name, n, s_Names.empty() ? "NOT FOUND" : s_Where,
+            s_List);
+    }
+
+    if (s_Names.empty()) {
+        Logger::Warn("[Delirium] {}: no bone names found, no body.", p_Name);
+        return false;
+    }
+
+    // The rig: the hips and everything under them, parents first (Hitman's own order).
+    int s_HipsBone = -1;
+
+    for (int i = 0; i < n && s_HipsBone < 0; ++i)
+        if (nm_rig_part_for_name(s_Names[i].c_str()) == 0)
+            s_HipsBone = i;
+
+    if (s_HipsBone < 0) {
+        Logger::Warn("[Delirium] {}: no pelvis among its bones.", p_Name);
+        return false;
+    }
+
     std::vector<int> s_InRig(n, -1);
     std::vector<int32_t> s_RigParents, s_Map;
 
-    for (int i = 1; i < n; ++i) {
+    for (int i = s_HipsBone; i < n; ++i) {
         const int s_Parent = b.m_Parents[i];
 
-        if (i == 1 || (s_Parent >= 0 && s_InRig[s_Parent] >= 0)) {
+        if (i == s_HipsBone || (s_Parent >= 0 && s_InRig[s_Parent] >= 0)) {
             s_InRig[i] = static_cast<int>(b.m_Bones.size());
-            s_RigParents.push_back(i == 1 ? -1 : s_InRig[s_Parent]);
-            s_Map.push_back(PartOf(i));
+            s_RigParents.push_back(i == s_HipsBone ? -1 : s_InRig[s_Parent]);
+            const int s_Part = nm_rig_part_for_name(s_Names[i].c_str());
+            s_Map.push_back(i == s_HipsBone ? 0 : s_Part == 0 ? -1 : s_Part);
             b.m_Bones.push_back(i);
         }
     }
@@ -619,6 +647,19 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     if (nm_rig_check(s_N, s_RigParents.data(), s_Places.data(), s_Map.data(), s_Report, sizeof(s_Report)) > 0)
         Logger::Warn("[Delirium] {}'s skeleton: {}", p_Name, s_Report);
 
+    {
+        const float* f = &b.m_Now[0];
+        float s_Lo = 1e9f, s_Hi = -1e9f;
+
+        for (int r = 0; r < s_N; ++r)
+            s_Lo = std::min(s_Lo, b.m_Now[r * 7 + 2]), s_Hi = std::max(s_Hi, b.m_Now[r * 7 + 2]);
+
+        const SMatrix s_M = p_Spatial->GetObjectToWorldMatrix();
+        Logger::Info("[Delirium] {}: hips {:.2f} {:.2f} {:.2f}, bones from z {:.2f} to {:.2f}, entity at {:.2f} {:.2f} {:.2f}; "
+            "bind pose {}.", p_Name, f[0], f[1], f[2], s_Lo, s_Hi, s_M.Trans.x, s_M.Trans.y, s_M.Trans.z,
+            [&] { std::string w; return Bones::BindPose(b.m_Anim, n, w).empty() ? std::string("not found") : w; }());
+    }
+
     float s_Joints[63];
 
     if (nm_rig_joints(s_N, s_RigParents.data(), s_Places.data(), s_Map.data(), s_Joints) < 0) {
@@ -631,9 +672,16 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     float s_L[3], s_R[3], s_Rot[4];
     nm_build_part_frame(s_Build, 1, s_L, s_Rot);
     nm_build_part_frame(s_Build, 4, s_R, s_Rot);
-    const float s_Yaw = Facing(V(&b.m_World[8 * 7]), V(&b.m_World[16 * 7])) - Facing(V(s_L), V(s_R));
+    const auto s_PartBone = [&](int p_Part) {
+        for (int r = 0; r < s_N; ++r)
+            if (s_Map[r] == p_Part)
+                return r;
 
-    const SVector3 s_Hips = V(&b.m_World[1 * 7]);
+        return 0;
+    };
+    const float s_Yaw = Facing(V(&b.m_Now[s_PartBone(1) * 7]), V(&b.m_Now[s_PartBone(4) * 7])) - Facing(V(s_L), V(s_R));
+
+    const SVector3 s_Hips = V(&b.m_Now[0]);
     float s_Floor = s_Hips.z;
 
     for (int i = 0; i < n; ++i)
@@ -787,7 +835,16 @@ void Delirium::Snapshot() {
         }
     }
 
+    // Hitman's skeletons as NM reads them (green): they should sit on the bodies.
+    std::vector<SVector3> s_Lines;
+
+    for (const Body& b : m_Bodies)
+        for (size_t r = 0; r < b.m_Bones.size() && b.m_Now.size() == b.m_Bones.size() * 7; ++r)
+            if (const int p = b.m_Parents[b.m_Bones[r]]; p >= 0 && b.m_World.size() > static_cast<size_t>(p) * 7 + 2)
+                s_Lines.insert(s_Lines.end(), {V(&b.m_Now[r * 7]), V(&b.m_World[p * 7])});
+
     std::scoped_lock s_Lock(m_Mutex);
+    m_Lines = std::move(s_Lines);
     m_Pose = std::move(s_Pose);
     m_Names = std::move(s_Names);
     m_PedsDrawn = m_Peds.size();
@@ -953,6 +1010,16 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
         if (b.m_Ragdoll)
             WritePose(b);
+
+        // 47 ragdolling: he goes where his body goes (no walking off out of it).
+        if (!b.m_Npc && b.m_Ragdoll) {
+            float s_Pos[3], s_Rot[4];
+            nm_agent_get_part_transform(b.m_Agent, 0, s_Pos, s_Rot);
+            SMatrix s_M = b.m_Spatial->GetObjectToWorldMatrix();
+            s_M.Trans.x = s_Pos[0];
+            s_M.Trans.y = s_Pos[1];
+            b.m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
+        }
     }
 
     Snapshot();
@@ -960,6 +1027,10 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
 void Delirium::Draw3D(IRenderer* p_Renderer) {
     std::scoped_lock s_Lock(m_Mutex);
+
+    if (m_ShowBodies)
+        for (size_t i = 0; i + 1 < m_Lines.size(); i += 2)
+            p_Renderer->DrawLine3D(m_Lines[i], m_Lines[i + 1], SVector4(0.2f, 1.f, 0.3f, 1.f), SVector4(0.2f, 1.f, 0.3f, 1.f));
 
     for (size_t p = 0; p < m_Pose.size(); ++p) {
         if (m_Pose[p].empty() || (!m_ShowBodies && (p == 0 || p > m_PedsDrawn)))
@@ -996,21 +1067,17 @@ void Delirium::Draw3D(IRenderer* p_Renderer) {
 }
 
 void Delirium::DrawMenu() {
-    if (!ImGui::CollapsingHeader("DELIRIUM TRAINER", ImGuiTreeNodeFlags_DefaultOpen))
-        return;
-
     ImGui::TextWrapped("%s", m_Status.c_str());
     ImGui::Checkbox("47's Homer body", &m_HitmanBody);
     ImGui::SameLine();
-    ImGui::Checkbox("Show NM bodies", &m_ShowBodies);
-    ImGui::Text("Numpad 1  Delirium on NPCs: %s", m_NpcMode ? "ON" : "off");
-    ImGui::Text("Numpad 2  47 ragdoll: %s", m_HitmanRagdoll ? "ON" : "off");
-    ImGui::TextDisabled("Numpad 5 / 6: shoot / push the body you aim at (a ped or an NPC).");
+    ImGui::Checkbox("Show bodies", &m_ShowBodies);
+    ImGui::TextDisabled("Num1 NPCs: %s   Num2 47 ragdoll: %s   Num5/6 shoot/push", m_NpcMode ? "ON" : "off",
+        m_HitmanRagdoll ? "ON" : "off");
     ImGui::Separator();
 
     std::scoped_lock s_Lock(m_Mutex);
 
-    if (ImGui::Button("Spawn Delirium ped"))
+    if (ImGui::Button("Spawn ped"))
         m_WantSpawn = true;
 
     ImGui::SameLine();
@@ -1020,11 +1087,12 @@ void Delirium::DrawMenu() {
 
     // Who: 47, a ped or an NPC.
     const auto s_NameOf = [&](int t) {
-        return t == 0 ? std::string("47 (Homer body)") : t - 1 < static_cast<int>(m_Names.size()) ? m_Names[t - 1] : "?";
+        return t == 0 ? std::string("47") : t - 1 < static_cast<int>(m_Names.size()) ? m_Names[t - 1] : "?";
     };
     m_Target = std::clamp(m_Target, 0, static_cast<int>(m_Names.size()));
+    ImGui::SetNextItemWidth(-1.f);
 
-    if (ImGui::BeginCombo("Target", s_NameOf(m_Target).c_str())) {
+    if (ImGui::BeginCombo("##target", ("Target: " + s_NameOf(m_Target)).c_str())) {
         for (int t = 0; t <= static_cast<int>(m_Names.size()); ++t)
             if (ImGui::Selectable(std::format("{}##t{}", s_NameOf(t), t).c_str(), m_Target == t))
                 m_Target = t;
@@ -1032,21 +1100,26 @@ void Delirium::DrawMenu() {
         ImGui::EndCombo();
     }
 
-    ImGui::SliderFloat("Strength", &m_Strength, 0.2f, 4.f, "%.1fx");
+    ImGui::SetNextItemWidth(-1.f);
+    ImGui::SliderFloat("##strength", &m_Strength, 0.2f, 4.f, "Strength %.1fx");
 
-    for (int i = 0; i < static_cast<int>(std::size(c_Actions)); ++i) {
-        if (i % 3)
-            ImGui::SameLine();
+    if (ImGui::BeginTable("##actions", 3, ImGuiTableFlags_SizingStretchSame)) {
+        for (const char* s_Action : c_Actions) {
+            ImGui::TableNextColumn();
 
-        if (ImGui::Button(c_Actions[i], ImVec2(118.f, 0.f)))
-            m_WantFire.emplace_back(m_Target, c_Actions[i]);
+            if (ImGui::Button(s_Action, ImVec2(-1.f, 0.f)))
+                m_WantFire.emplace_back(m_Target, s_Action);
+        }
+
+        ImGui::EndTable();
     }
 
-    // Every NM behaviour by name (the game's and Delirium's extras), started with its defaults.
+    // Every NM behaviour by name, started with its defaults; or any message line.
     if (!m_Messages.empty()) {
         m_Message = std::clamp(m_Message, 0, static_cast<int>(m_Messages.size()) - 1);
+        ImGui::SetNextItemWidth(-60.f);
 
-        if (ImGui::BeginCombo("Behaviour", m_Messages[m_Message].c_str())) {
+        if (ImGui::BeginCombo("##behaviour", m_Messages[m_Message].c_str())) {
             for (int m = 0; m < static_cast<int>(m_Messages.size()); ++m)
                 if (ImGui::Selectable(m_Messages[m].c_str(), m == m_Message))
                     m_Message = m;
@@ -1056,14 +1129,15 @@ void Delirium::DrawMenu() {
 
         ImGui::SameLine();
 
-        if (ImGui::Button("Start"))
+        if (ImGui::Button("Start", ImVec2(-1.f, 0.f)))
             m_WantFire.emplace_back(m_Target, "msg:" + m_Messages[m_Message] + " start=true");
     }
 
+    ImGui::SetNextItemWidth(-60.f);
     ImGui::InputText("##line", m_Text, sizeof(m_Text));
     ImGui::SameLine();
 
-    if (ImGui::Button("Send"))
+    if (ImGui::Button("Send", ImVec2(-1.f, 0.f)))
         m_WantFire.emplace_back(m_Target, std::string("msg:") + m_Text);
 
     if (!m_Line.empty())

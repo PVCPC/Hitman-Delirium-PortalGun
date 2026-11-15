@@ -53,6 +53,7 @@ struct PortalView {
     TEntityRef<ZRenderDestinationTextureEntity> m_Texture;
     // Whether to draw it this frame (both portals up, 47's camera in front of it and nothing in the way).
     bool m_Show = false;
+    std::string m_Why; // why it is or isn't shown (logged when it changes)
 };
 
 struct TrackedBody {
@@ -148,6 +149,9 @@ private:
     void DrawViews();
     PortalView m_Views[2];
     Delirium m_Delirium;
+    float m_Volume = 0.3f;
+    bool m_RightWasDown = false;
+    void DrawPortalTab();
     TResourcePtr<ZTemplateEntityFactory> m_ViewFactory;
     TResourcePtr<ZTemplateEntityBlueprintFactory> m_ViewBlueprint;
     bool m_ViewsFailed = false;

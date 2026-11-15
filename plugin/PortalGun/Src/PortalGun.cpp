@@ -375,9 +375,23 @@ void PortalGun::OnDrawUI(bool p_HasFocus) {
     m_HaveFocus = s_Want;
 
     if (m_MenuOpen) {
-        ImGui::SetNextWindowSize(ImVec2(380.f, 0.f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(420.f, 560.f), ImGuiCond_FirstUseEver);
         ImGui::Begin("Hitman-Delirium (Numpad 3)", &m_MenuOpen, ImGuiWindowFlags_NoCollapse);
-        OnDrawMenu();
+
+        if (ImGui::BeginTabBar("##tabs")) {
+            if (ImGui::BeginTabItem("Portals")) {
+                DrawPortalTab();
+                ImGui::EndTabItem();
+            }
+
+            if (ImGui::BeginTabItem("Delirium")) {
+                m_Delirium.DrawMenu();
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
+        }
+
         ImGui::End();
     }
 
@@ -489,33 +503,39 @@ void PortalGun::DrawSetup(bool p_HasFocus) {
     ImGui::End();
 }
 
+// The SDK's own menu: just the way into ours.
 void PortalGun::OnDrawMenu() {
-    if (ImGui::Button(ICON_MD_FOLDER " PORTAL: YOUR GAMES (PORTAL 2 / GTA IV)"))
+    if (ImGui::Button(ICON_MD_MENU " HITMAN-DELIRIUM (NUMPAD 3)"))
+        m_MenuOpen = true;
+}
+
+void PortalGun::DrawPortalTab() {
+    if (ImGui::Button(ICON_MD_FOLDER " YOUR GAMES (PORTAL 2 / GTA IV)"))
         m_SetupOpen = true;
 
-    if (ImGui::Button(ICON_MD_ADD " PORTAL: GIVE PORTAL GUN"))
+    if (ImGui::Button(ICON_MD_ADD " GIVE PORTAL GUN"))
         m_RequestGive = true;
 
-    if (ImGui::Button(ICON_MD_CIRCLE " PORTAL: BLUE"))
+    if (ImGui::Button(ICON_MD_CIRCLE " BLUE"))
         m_RequestBlue = true;
 
-    if (ImGui::Button(ICON_MD_CIRCLE " PORTAL: ORANGE"))
+    if (ImGui::Button(ICON_MD_CIRCLE " ORANGE"))
         m_RequestOrange = true;
 
-    if (ImGui::Button(ICON_MD_CIRCLE " PORTAL: BLUE IN FRONT"))
+    if (ImGui::Button(ICON_MD_CIRCLE " BLUE IN FRONT"))
         m_RequestBlueHere = true;
 
-    if (ImGui::Button(ICON_MD_CIRCLE " PORTAL: ORANGE IN FRONT"))
+    if (ImGui::Button(ICON_MD_CIRCLE " ORANGE IN FRONT"))
         m_RequestOrangeHere = true;
 
-    if (ImGui::Button(ICON_MD_ADD " PORTAL: SPAWN CUBE"))
+    if (ImGui::Button(ICON_MD_ADD " SPAWN CUBE"))
         m_RequestCube = true;
 
-    if (ImGui::Button(ICON_MD_CLEAR " PORTAL: CLEAR"))
+    if (ImGui::Button(ICON_MD_CLEAR " CLEAR"))
         m_RequestClear = true;
 
     ImGui::Checkbox("See-through portals", &m_SeeThrough);
-    m_Delirium.DrawMenu();
+    ImGui::SliderFloat("Volume", &m_Volume, 0.f, 1.f, "%.2f");
 }
 
 void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
@@ -559,8 +579,14 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
     // Right click (Hitman's aim, swallowed below) fires orange, like Portal.
     const bool s_AimHeld = m_AimSeenFrame != 0 && m_AimSeenFrame + 1 >= m_Frame;
 
-    if (s_AimHeld && !m_AimWasHeld && s_GunInHand)
+    DWORD s_Fg = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &s_Fg);
+    const bool s_RightDown = !m_MenuOpen && s_Fg == GetCurrentProcessId() && (GetAsyncKeyState(VK_RBUTTON) & 0x8000);
+
+    if (((s_AimHeld && !m_AimWasHeld) || (s_RightDown && !m_RightWasDown)) && s_GunInHand)
         m_RequestOrange = true;
+
+    m_RightWasDown = s_RightDown;
 
     m_AimWasHeld = s_AimHeld;
 
@@ -1045,7 +1071,7 @@ bool PortalGun::ShootPortal(
     ZEntityRef s_Ignore = p_Hitman;
 
     const bool s_IsBlue = &p_Portal == &m_Blue;
-    Sfx::Play(s_IsBlue ? Sfx::ShootBlue : Sfx::ShootOrange);
+    Sfx::Play(s_IsBlue ? Sfx::ShootBlue : Sfx::ShootOrange, m_Volume);
     const int s_Result = dp_shoot(
         &DpRayCast, &s_Ignore, &s_From, &s_Dir, c_MaxRange, p_Other.m_Placed ? &s_Other : nullptr,
         s_BothOpen ? s_Linked : nullptr, &s_Out, &s_ShotHit
@@ -1067,7 +1093,7 @@ bool PortalGun::ShootPortal(
 
     p_Portal = {};
     p_Portal.m_Transform = s_Frame;
-    Sfx::Play(s_IsBlue ? Sfx::OpenBlue : Sfx::OpenOrange);
+    Sfx::Play(s_IsBlue ? Sfx::OpenBlue : Sfx::OpenOrange, m_Volume);
     p_Portal.m_Placed = true;
 
     Logger::Info(
@@ -2127,6 +2153,15 @@ void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
             continue;
 
         s_View.m_Show = false;
+        const std::string s_WasWhy = s_View.m_Why;
+        struct LogWhy {
+            PortalView& v; const std::string& was; int i;
+            ~LogWhy() {
+                if (v.m_Why != was)
+                    Logger::Info("[PortalGun] See-through {}: {}.", i ? "orange" : "blue", v.m_Why);
+            }
+        } s_LogWhy {s_View, s_WasWhy, i};
+        s_View.m_Why = "off";
         const bool s_On = s_Both && m_SeeThrough && s_Camera;
         s_View.m_Camera.m_entityRef.SetProperty("m_bVisible", s_On);
         s_View.m_Texture.m_entityRef.SetProperty("m_bVisible", s_On);
@@ -2143,15 +2178,19 @@ void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
         const SVector3 s_Centre = ToVec3(s_In.m_Transform.Trans);
         const SVector3 s_Normal = ToVec3(s_In.m_Transform.YAxis).Normalized();
 
-        if ((s_Eye - s_Centre).Dot(s_Normal) <= 0.02f)
+        if ((s_Eye - s_Centre).Dot(s_Normal) <= 0.02f) {
+            s_View.m_Why = "behind it";
             continue;
+        }
 
         SVector3 s_Hit, s_HitNormal;
         const SVector3 s_Near = s_Centre + s_Normal * 0.05f;
 
         if (RayCast(s_Eye, s_Near, p_Hitman, s_Hit, s_HitNormal) &&
-            (s_Hit - s_Eye).Length() < (s_Near - s_Eye).Length() - 0.1f)
+            (s_Hit - s_Eye).Length() < (s_Near - s_Eye).Length() - 0.1f) {
+            s_View.m_Why = std::format("blocked {:.2f} m short", (s_Near - s_Eye).Length() - (s_Hit - s_Eye).Length());
             continue;
+        }
 
         // The player's camera put through the portal, looking out of the other one.
         const SMatrix s_Virtual = MapThroughPortal(s_Cam, s_In.m_Transform, s_Out.m_Transform);
@@ -2165,6 +2204,7 @@ void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
         s_View.m_Camera.m_entityRef.SetProperty("m_fFovYDeg", s_Camera->GetFovYDeg());
         s_View.m_Camera.m_entityRef.SetProperty("m_fAspectWByH", m_ScreenW / std::max(1.f, m_ScreenH));
         s_View.m_Show = true;
+        s_View.m_Why = "shown";
     }
 }
 
@@ -2198,8 +2238,12 @@ void PortalGun::DrawViews() {
 
         const auto s_Rt = reinterpret_cast<ZRenderDestination*>(s_View.m_Texture.m_pInterfaceRef->GetRenderDestination());
 
-        if (!s_Rt)
+        if (!s_Rt) {
+            if (s_View.m_Why != "no render target")
+                Logger::Warn("[PortalGun] See-through {}: no render target.", i ? "orange" : "blue");
+
             continue;
+        }
 
         const SMatrix& s_M = (i == 0 ? m_Blue : m_Orange).m_Transform;
         const auto s_Screen = [&](float p_X, float p_Z, ImVec2& p_Out) {

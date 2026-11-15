@@ -63,6 +63,7 @@ private:
         std::vector<Bones::SQV> m_Local; // the animation's pose this frame (Hitman's, every bone)
         std::vector<float> m_World;    // every bone's world frame this frame (7 floats each)
         bool m_Dead = false;
+        int m_Layout = -1;
         bool m_Npc = false;
         bool m_Ragdoll = false;
         std::string m_Name;
@@ -73,6 +74,7 @@ private:
     bool Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool p_Npc, bool p_Female, const Ray& p_Ray,
         const std::string& p_Name);
     void Detach(Body& p_Body);
+    void Root(Body& p_Body, float* p_Turn, SVector3& p_P);
     bool Posed(Body& p_Body);
     void WritePose(Body& p_Body);
     void UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet);
@@ -119,6 +121,7 @@ private:
     SVector3 m_Eye, m_Aim;
     std::vector<std::vector<float>> m_Pose; // per ped and body: 21 x 7 floats
     size_t m_PedsDrawn = 0;
+    std::vector<SVector3> m_Lines; // skeleton lines, in pairs
     std::vector<std::string> m_Names; // the targets after 47, for the menu
     float m_Accum = 0.f;
     float m_GroundTimer = 0.f;
