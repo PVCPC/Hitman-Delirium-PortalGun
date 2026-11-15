@@ -59,6 +59,7 @@ public:
     void Init() override;
     void OnDrawMenu() override;
     void OnDrawUI(bool p_HasFocus) override;
+    void DrawSetup(bool p_HasFocus);
     void OnDraw3D(IRenderer* p_Renderer) override;
 
 private:
@@ -155,6 +156,10 @@ private:
     // The startup window: open, games skipped (Portal 2, GTA IV), a Browse running, its result (1 saved, 2/3 wrong
     // folder for Portal 2 / GTA IV), the last error shown.
     bool m_SetupOpen = false;
+    // Our menu window (Numpad 3), the key's state last frame, and whether we hold the SDK's UI focus.
+    bool m_MenuOpen = false;
+    bool m_MenuKeyDown = false;
+    bool m_HaveFocus = false;
     bool m_Skip[2] = {};
     std::atomic<bool> m_Browsing = false;
     std::atomic<int> m_BrowseResult = 0;

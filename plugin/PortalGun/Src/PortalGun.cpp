@@ -346,16 +346,45 @@ void PortalGun::OnDrawUI(bool p_HasFocus) {
         FindGames();
     }
 
-    if (!m_SetupOpen)
-        return;
+    // Numpad 3 (while the game's window is in front) opens and closes our menu.
+    DWORD s_Pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &s_Pid);
+    const bool s_Key = s_Pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_NUMPAD3) & 0x8000);
 
+    if (s_Key && !m_MenuKeyDown)
+        m_MenuOpen = !m_MenuOpen;
+
+    m_MenuKeyDown = s_Key;
+
+    // Our windows take the mouse while they're open, and give it back after.
+    const bool s_Want = m_MenuOpen || m_SetupOpen;
+
+    if (s_Want && !m_HaveFocus)
+        SDK()->RequestUIFocus();
+    else if (!s_Want && m_HaveFocus)
+        SDK()->ReleaseUIFocus();
+
+    m_HaveFocus = s_Want;
+
+    if (m_MenuOpen) {
+        ImGui::SetNextWindowSize(ImVec2(380.f, 0.f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Hitman-Delirium (Numpad 3)", &m_MenuOpen, ImGuiWindowFlags_NoCollapse);
+        OnDrawMenu();
+        ImGui::End();
+    }
+
+    if (m_SetupOpen)
+        DrawSetup(p_HasFocus);
+}
+
+void PortalGun::DrawSetup(bool p_HasFocus) {
     const ImVec2 s_Screen = ImGui::GetIO().DisplaySize;
     ImGui::SetNextWindowSize(ImVec2(720.f, 0.f), ImGuiCond_Always);
     ImGui::SetNextWindowPos(ImVec2(s_Screen.x * 0.5f, s_Screen.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::Begin("Hitman-Delirium Portal Gun", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
 
     if (!p_HasFocus)
-        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "Press ~ to use this window.");
+        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "Press Numpad 3 to use this window.");
 
     ImGui::TextWrapped("The portal gun works on its own. Your own games add to it (they're not included):");
     ImGui::Spacing();
@@ -437,7 +466,7 @@ void PortalGun::OnDrawUI(bool p_HasFocus) {
     if (!m_SetupError.empty())
         ImGui::TextColored(ImVec4(0.94f, 0.47f, 0.39f, 1.f), "%s", m_SetupError.c_str());
 
-    ImGui::TextDisabled("You only do this once: it's remembered. Change it later from the mod menu.");
+    ImGui::TextDisabled("You only do this once: it's remembered. Change it later from the menu (Numpad 3).");
 
     if (ImGui::Button("Done")) {
         m_SetupOpen = false;
