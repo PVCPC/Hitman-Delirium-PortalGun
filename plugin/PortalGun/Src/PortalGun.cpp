@@ -2310,7 +2310,7 @@ void PortalGun::SpawnViews() {
     // Half the screen's resolution: same shape as the screen, so screen positions are texture positions.
     std::string s_Json = c_PortalViewJson;
     const auto s_Put = [&](const char* p_Key, uint32_t p_Value) {
-        s_Json.replace(s_Json.find(p_Key), 3, std::to_string(p_Value));
+        s_Json.replace(s_Json.find(p_Key), std::strlen(p_Key), std::to_string(p_Value));
     };
     s_Put("@W@", std::max(64u, static_cast<uint32_t>(m_ScreenW * 0.5f)));
     s_Put("@PIP@", m_CornerPicture ? 1u : 0u);

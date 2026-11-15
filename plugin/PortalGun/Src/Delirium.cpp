@@ -295,14 +295,18 @@ void Delirium::Configure(const std::filesystem::path& p_Dir, const std::string& 
         g_RagdollAt = AddressOf(Functions::ZHM5BaseCharacter_ActivateRagdoll);
         g_PoweredAt = AddressOf(Functions::ZHM5BaseCharacter_ActivatePoweredRagdoll);
 
-        if (g_RagdollAt && MH_CreateHook(g_RagdollAt, reinterpret_cast<void*>(&HkRagdoll), reinterpret_cast<void**>(&g_Ragdoll)) == MH_OK)
+        const int s_R = g_RagdollAt ? MH_CreateHook(g_RagdollAt, reinterpret_cast<void*>(&HkRagdoll), reinterpret_cast<void**>(&g_Ragdoll)) : -99;
+        const int s_P = g_PoweredAt ? MH_CreateHook(g_PoweredAt, reinterpret_cast<void*>(&HkPowered), reinterpret_cast<void**>(&g_Powered)) : -99;
+
+        if (s_R == MH_OK)
             MH_EnableHook(g_RagdollAt);
 
-        if (g_PoweredAt && MH_CreateHook(g_PoweredAt, reinterpret_cast<void*>(&HkPowered), reinterpret_cast<void**>(&g_Powered)) == MH_OK)
+        if (s_P == MH_OK)
             MH_EnableHook(g_PoweredAt);
 
-        Logger::Info("[Delirium] Game ragdoll hooks: {} {}.", g_Ragdoll ? "ragdoll" : "NO ragdoll",
-            g_Powered ? "powered" : "NO powered");
+        // MinHook's status (-99: the SDK found no address; 9: the function is already hooked by us, ...), for the log.
+        Logger::Info("[Delirium] Game ragdoll hooks: {} ({} at {}), {} ({} at {}).", g_Ragdoll ? "ragdoll" : "NO ragdoll", s_R,
+            g_RagdollAt, g_Powered ? "powered" : "NO powered", s_P, g_PoweredAt);
     }
 }
 
