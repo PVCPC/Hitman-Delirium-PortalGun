@@ -148,6 +148,12 @@ namespace {
     void (*g_Powered)(ZHM5BaseCharacter*, float, bool, bool, float, bool) = nullptr;
     void* g_RagdollAt = nullptr;
     void* g_PoweredAt = nullptr;
+    void (*g_Deactivate)(ZHM5BaseCharacter*) = nullptr;
+    void* g_DeactivateAt = nullptr;
+    // NPCs whose NM body is down: the game may not take its ragdoll off them (Billy: its AI then got up on its own,
+    // the green skeleton walked and talked on while Homer's body lay there). Only Delirium's own get-up does.
+    std::unordered_set<void*> g_Down;
+    thread_local bool t_OurDeactivate = false;
 
     bool Owned(void* p_Char) {
         std::scoped_lock s_Lock(g_OwnedMutex);
@@ -222,6 +228,38 @@ namespace {
         int s_Bones[64];
         void* s_Set = nullptr;
         return ReadRagdoll(c, &s_Set, s_Bodies, s_Bones) > 0;
+    }
+
+    void HkDeactivate(ZHM5BaseCharacter* c) {
+        {
+            std::scoped_lock s_Lock(g_OwnedMutex);
+
+            if (!t_OurDeactivate && g_Down.contains(c)) {
+                static int s_Logs = 0;
+
+                if (s_Logs++ < 5)
+                    Logger::Info("[Delirium] The game tried to take its ragdoll off an NPC whose body is down; kept on.");
+
+                return;
+            }
+        }
+
+        g_Deactivate(c);
+    }
+
+    void Down(void* c, bool p_On) {
+        std::scoped_lock s_Lock(g_OwnedMutex);
+        p_On ? (void) g_Down.insert(c) : (void) g_Down.erase(c);
+    }
+
+    // Delirium's own calls to the game's deactivate (the get-up), past HkDeactivate.
+    void OurDeactivate(ZHM5BaseCharacter* c) {
+        if (!Functions::ZHM5BaseCharacter_DeactivateRagdoll)
+            return;
+
+        t_OurDeactivate = true;
+        Functions::ZHM5BaseCharacter_DeactivateRagdoll->Call(c);
+        t_OurDeactivate = false;
     }
 
     std::vector<SMatrix> TakeRagdollStart(void* c) {
@@ -324,6 +362,15 @@ void Delirium::Configure(const std::filesystem::path& p_Dir, const std::string& 
 
         if (s_P == MH_OK)
             MH_EnableHook(g_PoweredAt);
+
+        g_DeactivateAt = AddressOf(Functions::ZHM5BaseCharacter_DeactivateRagdoll);
+        const int s_D = g_DeactivateAt
+            ? MH_CreateHook(g_DeactivateAt, reinterpret_cast<void*>(&HkDeactivate), reinterpret_cast<void**>(&g_Deactivate)) : -99;
+
+        if (s_D == MH_OK)
+            MH_EnableHook(g_DeactivateAt);
+
+        Logger::Info("[Delirium] Game ragdoll-off hook: {} ({}).", g_Deactivate ? "on" : "NO", s_D);
 
         // MinHook's status (-99: the SDK found no address; 9: the function is already hooked by us, ...), for the log.
         Logger::Info("[Delirium] Game ragdoll hooks: {} ({} at {}), {} ({} at {}).", g_Ragdoll ? "ragdoll" : "NO ragdoll", s_R,
@@ -450,6 +497,7 @@ void Delirium::Clear() {
         std::scoped_lock s_Owned(g_OwnedMutex);
         g_RagdollStart.clear();
         g_GameTook.clear();
+        g_Down.clear();
     }
 
     if (m_World)
@@ -1745,6 +1793,7 @@ void Delirium::Unhook() {
 
 void Delirium::Detach(Body& p_Body) {
     Own(p_Body.m_Char, false, false);
+    Down(p_Body.m_Char, false);
     Bones::Override(p_Body.m_Anim, {});
 
     if (p_Body.m_Rig)
@@ -1803,6 +1852,9 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
 
         // Billy: knocked down mid walk cycle, the game's AI walked the NPC on without its body. The game's own ragdoll
         // stops it; its bodies then follow NM's (Follow), as a kill's do. Off again at the get-up.
+        if (b->m_Npc)
+            Down(b->m_Char, true);
+
         if (b->m_Npc && !b->m_Follow && Functions::ZHM5BaseCharacter_ActivateRagdoll) {
             Functions::ZHM5BaseCharacter_ActivateRagdoll->Call(b->m_Char, true);
             b->m_Follow = true;
@@ -1812,6 +1864,7 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
     else {
         // Back on his animation from where it is now, blended from the ragdoll's last pose (the get-up).
         Bones::Override(b->m_Anim, {});
+        Down(b->m_Char, false);
 
         // The game's ragdoll (made at the knock-down) off: its bodies let go, then the game's own deactivate.
         if (b->m_Npc && b->m_Follow && !b->m_Dead) {
@@ -1827,8 +1880,8 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
                 b->m_Recover = 6.f;
                 Logger::Info("[Delirium] {}: Hitman's get-up.", b->m_Name);
             }
-            else if (Functions::ZHM5BaseCharacter_DeactivateRagdoll)
-                Functions::ZHM5BaseCharacter_DeactivateRagdoll->Call(b->m_Char);
+            else
+                OurDeactivate(b->m_Char);
 
             b->m_Follow = false;
             b->m_FollowSet = nullptr;
@@ -2063,8 +2116,8 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             const bool s_On = GameRagdollOn(b.m_Char);
 
             if ((b.m_Recover -= p_Dt) <= 0.f || !s_On || b.m_Ragdoll || static_cast<ZActor*>(b.m_Char)->IsDead()) {
-                if (!b.m_Ragdoll && !static_cast<ZActor*>(b.m_Char)->IsDead() && Functions::ZHM5BaseCharacter_DeactivateRagdoll)
-                    Functions::ZHM5BaseCharacter_DeactivateRagdoll->Call(b.m_Char);
+                if (!b.m_Ragdoll && !static_cast<ZActor*>(b.m_Char)->IsDead())
+                    OurDeactivate(b.m_Char);
 
                 GameTook(b.m_Char);
                 Logger::Info("[Delirium] {}: up ({}).", b.m_Name, s_On ? "timed out" : "Hitman's get-up done");
