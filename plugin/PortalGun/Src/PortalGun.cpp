@@ -2357,7 +2357,7 @@ void PortalGun::DeleteViews() {
 void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
     const bool s_Both = m_Blue.m_Placed && m_Orange.m_Placed;
 
-    if (s_Both && m_SeeThrough && !m_Views[0].m_Root && !m_ViewsFailed)
+    if (m_SeeThrough && !m_Views[0].m_Root && !m_ViewsFailed)
         SpawnViews();
 
     std::scoped_lock s_Lock(m_ViewMutex);

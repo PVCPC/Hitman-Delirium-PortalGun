@@ -1293,9 +1293,13 @@ void Delirium::UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet) {
         const ZGlobalOutfitKit* s_Outfit = a->m_rOutfit.m_pInterfaceRef;
         const bool s_Female = s_Outfit && s_Outfit->m_bIsFemale;
 
+        HitchTimer s_T {"NPC body made"};
+
         if (Attach(a, s_Actor.m_entityRef.QueryInterface<ZSpatialEntity>(), true, s_Female, p_Ray,
             std::string(a->m_sActorName.c_str(), a->m_sActorName.size())))
             ++s_Count;
+
+        break; // the next one next frame
     }
 }
 
