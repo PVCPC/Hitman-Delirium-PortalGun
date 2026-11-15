@@ -486,9 +486,8 @@ void Delirium::UpdateGround(const Ray& p_Ray) {
                     s_Verts.insert(s_Verts.end(), {v.x, v.y, s_Floor + sz});
                 }
 
-                // Both faces (whichever way NM takes a triangle's front).
-                s_Tris.insert(s_Tris.end(), {s_Base, s_Base + 1, s_Base + 2, s_Base, s_Base + 2, s_Base + 3, s_Base, s_Base + 2,
-                    s_Base + 1, s_Base, s_Base + 3, s_Base + 2});
+                // NM's triangles collide on both sides (a second winding pushed twice: jitter; Pelican).
+                s_Tris.insert(s_Tris.end(), {s_Base, s_Base + 1, s_Base + 2, s_Base, s_Base + 2, s_Base + 3});
             }
         }
 
