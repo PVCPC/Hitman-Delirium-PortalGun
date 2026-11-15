@@ -58,6 +58,7 @@ private:
         void* m_Anim = nullptr;
         NmAgent* m_Agent = nullptr;
         NmRig* m_Rig = nullptr;
+        NmBuild* m_Build = nullptr; // fitted to it, freed with it
         std::vector<int> m_Bones;      // Hitman bone of each rig bone (the pelvis and everything under it)
         std::vector<int32_t> m_Parents; // Hitman's parents, every bone
         std::vector<float> m_Now;      // the rig bones' world frames this frame (7 floats each)

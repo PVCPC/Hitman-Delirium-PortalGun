@@ -55,22 +55,6 @@ namespace {
 
     Q Conj(const Q& a) { return {-a.x, -a.y, -a.z, a.w}; }
 
-    // The shortest turn taking direction a onto direction b.
-    Q Between(SVector3 a, SVector3 b) {
-        a = a.Normalized();
-        b = b.Normalized();
-        const SVector3 c = a.Cross(b);
-        const float d = a.Dot(b);
-
-        if (d < -0.9999f) {
-            const SVector3 s_Axis = (std::abs(a.x) < 0.9f ? a.Cross(SVector3(1.f, 0.f, 0.f)) : a.Cross(SVector3(0.f, 1.f, 0.f))).Normalized();
-            return {s_Axis.x, s_Axis.y, s_Axis.z, 0.f};
-        }
-
-        const float l = std::sqrt(c.x * c.x + c.y * c.y + c.z * c.z + (1.f + d) * (1.f + d));
-        return {c.x / l, c.y / l, c.z / l, (1.f + d) / l};
-    }
-
     Q Norm(const Q& a) {
         const float l = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
         return l > 1e-6f ? Q {a.x / l, a.y / l, a.z / l, a.w / l} : Q {0.f, 0.f, 0.f, 1.f};
@@ -749,6 +733,27 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         }
     }
 
+    // Animated or not: each limb bone's turn now against its bind pose (0 degrees every time: the buffer holds bind
+    // values there, and the drawn pose comes from a later layer).
+    {
+        std::string w, s_Diff;
+        const std::vector<Bones::SQV> s_BindPose = Bones::BindPose(s_Rig, n, w);
+
+        for (int i = 0; i < n && s_BindPose.size() == static_cast<size_t>(n); ++i) {
+            for (const char* s_Bone : {"spine1", "neck", "l_clavicle", "l_upperarm", "l_forearm", "r_upperarm", "l_thigh", "l_calf", "r_thigh"}) {
+                if (_stricmp(s_Names[i].c_str(), s_Bone) != 0)
+                    continue;
+
+                const float* x = s_Local[i].q;
+                const float* y = s_BindPose[i].q;
+                const float d = std::min(1.f, std::abs(x[0] * y[0] + x[1] * y[1] + x[2] * y[2] + x[3] * y[3]));
+                s_Diff += std::format("{} {:.0f} ", s_Bone, 2.f * std::acos(d) * 57.2958f);
+            }
+        }
+
+        Logger::Info("[Delirium] {}: degrees off the bind pose: {}", p_Name, s_Diff.empty() ? "no bind pose" : s_Diff);
+    }
+
     // The rig: the hips and everything under them, parents first (Hitman's own order).
     int s_HipsBone = -1;
 
@@ -811,19 +816,15 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         return false;
     }
 
-    // Homer's (or Wilma's) own body, unfitted, turned to face where the skeleton faces, its feet on the ground.
-    NmBuild* s_Build = p_Female && m_Wilma ? m_Wilma : m_Build;
-    float s_L[3], s_R[3], s_Rot[4];
-    nm_build_part_frame(s_Build, 1, s_L, s_Rot);
-    nm_build_part_frame(s_Build, 4, s_R, s_Rot);
-    const auto s_PartBone = [&](int p_Part) {
-        for (int r = 0; r < s_N; ++r)
-            if (s_Map[r] == p_Part)
-                return r;
+    // Homer (or Wilma) fitted to this character's own proportions (Pelican): the keyframe then puts every part
+    // exactly on its bone, no length fight (shaking) or baked-in pelvis height (floating). REAL: one world, scale 1.
+    NmBuild* s_Base = p_Female && m_Wilma ? m_Wilma : m_Build;
+    b.m_Build = nm_build_fit_sized(s_Base, s_Joints, NM_SIZE_REAL);
 
-        return 0;
-    };
-    const float s_Yaw = Facing(V(&b.m_Now[s_PartBone(1) * 7]), V(&b.m_Now[s_PartBone(4) * 7])) - Facing(V(s_L), V(s_R));
+    if (!b.m_Build) {
+        Logger::Warn("[Delirium] {}: fit failed: {}", p_Name, LastError());
+        return false;
+    }
 
     const SVector3 s_Hips = V(&b.m_Now[0]);
     float s_Floor = s_Hips.z;
@@ -837,61 +838,9 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         s_Floor = s_Hit.z;
 
     const float s_At[3] = {s_Hips.x, s_Hips.y, s_Floor};
-    b.m_Agent = nm_agent_create(s_Build, s_At, s_Yaw, 0.37f);
+    b.m_Agent = nm_agent_create(b.m_Build, s_At, 0.f, 0.37f);
 
-    // The rest pose must be the agent's own (it stands straight, arms down): bend each limb of the skeleton's pose now
-    // onto the agent's, segment by segment from the hips out, or the walk's bent knee is baked in and it contorts.
-    std::vector<float> s_Rest = b.m_Now;
-
-    if (b.m_Agent) {
-        const auto s_Under = [&](int k, int r) {
-            for (; k >= 0; k = s_RigParents[k])
-                if (k == r)
-                    return true;
-
-            return false;
-        };
-
-        for (int r = 1; r < s_N; ++r) {
-            if (s_Map[r] <= 0)
-                continue;
-
-            // The segment: this bone to its first descendant on another part (thigh to calf, upper arm to forearm).
-            int d = -1;
-
-            for (int k = r + 1; k < s_N && d < 0; ++k)
-                if (s_Map[k] >= 0 && s_Map[k] != s_Map[r] && s_Under(k, r))
-                    d = k;
-
-            if (d < 0)
-                continue;
-
-            float s_A[3], s_B[3], s_Q[4];
-            nm_agent_get_part_transform(b.m_Agent, s_Map[r], s_A, s_Q);
-            nm_agent_get_part_transform(b.m_Agent, s_Map[d], s_B, s_Q);
-            const SVector3 s_From = V(&s_Rest[r * 7]);
-            const SVector3 s_Skel = V(&s_Rest[d * 7]) - s_From;
-            const SVector3 s_Want = V(s_B) - V(s_A);
-
-            if (s_Skel.Length() < 0.03f || s_Want.Length() < 0.03f)
-                continue;
-
-            const Q s_Turn = Between(s_Skel, s_Want);
-
-            for (int k = r; k < s_N; ++k) {
-                if (!s_Under(k, r))
-                    continue;
-
-                float* f = &s_Rest[k * 7];
-                const SVector3 s_P = s_From + Rot(s_Turn, V(f) - s_From);
-                const Q s_R = Norm(Mul(s_Turn, Q {f[3], f[4], f[5], f[6]}));
-                f[0] = s_P.x, f[1] = s_P.y, f[2] = s_P.z;
-                f[3] = s_R.x, f[4] = s_R.y, f[5] = s_R.z, f[6] = s_R.w;
-            }
-        }
-    }
-
-    b.m_Rig = b.m_Agent ? nm_rig_create(b.m_Agent, s_N, s_RigParents.data(), s_Rest.data(), s_Map.data()) : nullptr;
+    b.m_Rig = b.m_Agent ? nm_rig_create(b.m_Agent, s_N, s_RigParents.data(), b.m_Now.data(), s_Map.data()) : nullptr;
 
     if (!b.m_Rig) {
         Logger::Warn("[Delirium] {}: {}", p_Name, LastError());
@@ -899,6 +848,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         if (b.m_Agent)
             nm_agent_destroy(b.m_Agent);
 
+        nm_build_destroy(b.m_Build);
         return false;
     }
 
@@ -907,7 +857,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     // On its animation exactly until hit or killed (GTA IV's way); a free half-ragdoll walking it sent them flying.
     nm_agent_keyframe(b.m_Agent, "fb", 1);
 
-    Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Build == m_Wilma ? "Wilma" : "Homer", n,
+    Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Base == m_Wilma ? "Wilma" : "Homer", n,
         s_N);
     Own(b.m_Char, true);
     m_Bodies.push_back(std::move(b));
@@ -930,8 +880,12 @@ void Delirium::Detach(Body& p_Body) {
     if (p_Body.m_Agent)
         nm_agent_destroy(p_Body.m_Agent);
 
+    if (p_Body.m_Build)
+        nm_build_destroy(p_Body.m_Build);
+
     p_Body.m_Rig = nullptr;
     p_Body.m_Agent = nullptr;
+    p_Body.m_Build = nullptr;
 }
 
 void Delirium::SetHitmanRagdoll(bool p_On) {
