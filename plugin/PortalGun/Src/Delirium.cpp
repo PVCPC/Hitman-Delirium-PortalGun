@@ -1342,7 +1342,45 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
             for (int r = 0; r < s_N; ++r)
                 std::copy_n(&s_W[b.m_Bones[r] * 7], 7, &s_Rest[r * 7]);
 
-            Logger::Info("[Delirium] {}: fitted on the bind pose.", p_Name);
+            // Pelican: a skinning bind pose may be stored inverted (model to bone), not in the animator's convention.
+            // The tell: a limb bone's axis that runs along the limb (to its child) differs between the bind and the
+            // live pose. Then the live idle is the rest (one convention by construction).
+            // Each limb bone's along-axis (axis and sign, as 1..3 or -1..-3) in a pose.
+            const auto s_Along = [&](const std::vector<float>& p_W, int p_Part, int p_Child) {
+                const int r = b.m_PartRig[p_Part], c = b.m_PartRig[p_Child];
+
+                if (r < 0 || c < 0)
+                    return 0;
+
+                const SVector3 s_L = (V(&p_W[c * 7]) - V(&p_W[r * 7])).Normalized();
+                int s_Best = 0;
+                float s_Most = 0.f;
+
+                for (int k = 0; k < 3; ++k) {
+                    const float d = Rotate(&p_W[r * 7 + 3], SVector3(k == 0, k == 1, k == 2)).Dot(s_L);
+
+                    if (std::abs(d) > std::abs(s_Most))
+                        s_Most = d, s_Best = (k + 1) * (d < 0.f ? -1 : 1);
+                }
+
+                return s_Best;
+            };
+            std::string s_Axes;
+            bool s_Agree = true;
+
+            for (const auto& [s_Pt, s_Ch] : {std::pair {14, 15}, {15, 16}, {18, 19}, {19, 20}, {1, 2}, {2, 3}, {4, 5}, {5, 6}}) {
+                const int s_B = s_Along(s_Rest, s_Pt, s_Ch), s_L = s_Along(b.m_Now, s_Pt, s_Ch);
+                s_Axes += std::format("{}:{}/{} ", s_Pt, s_B, s_L);
+                s_Agree = s_Agree && s_B == s_L;
+            }
+
+            if (s_Agree)
+                Logger::Info("[Delirium] {}: fitted on the bind pose (limb axes bind/live agree: {}).", p_Name, s_Axes);
+            else {
+                s_Rest = b.m_Now;
+                Logger::Warn("[Delirium] {}: the bind pose's turns aren't the animation's (limb axes bind/live: {}); fitted on "
+                    "the live pose instead.", p_Name, s_Axes);
+            }
         }
     }
 
