@@ -1473,6 +1473,15 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         return false;
     }
 
+    // Fred's girth on a slim Hitman man (Billy: the stomach looks way too big): weighed as a slim man, which thins every
+    // capsule alike (SDK: by the weight's fourth root, within a third to three times the fitted weight).
+    {
+        const float s_Was = nm_build_get_weight(b.m_Build);
+        const float s_Kg = std::clamp(p_Female ? 58.f : 72.f, s_Was / 3.f + 0.5f, s_Was * 3.f - 0.5f);
+        nm_build_set_weight(b.m_Build, s_Kg);
+        Logger::Info("[Delirium] {}: weighed {:.0f} kg as fitted, now {:.0f} kg.", p_Name, s_Was, nm_build_get_weight(b.m_Build));
+    }
+
     const SVector3 s_Hips = V(&b.m_Now[0]);
     float s_Floor = s_Hips.z;
 
@@ -1579,7 +1588,10 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     // On its animation exactly until hit or killed (GTA IV's way); a free half-ragdoll walking it sent them flying.
     // Keyframed parts can't move, so a keyframed NPC stays out of the other bodies' contacts until it ragdolls.
     nm_agent_keyframe(b.m_Agent, "fb", 1);
-    nm_agent_collide_agents(b.m_Agent, 0); // keyframed = infinite mass: 47's launched ragdolled NPCs (pushes below instead)
+    nm_agent_collide_agents(b.m_Agent, 0);
+    // The live pose lies outside Fred's joints (upper arm ~1.9x its range): keyframed parts were pulled to the limits
+    // and buzzed there (Billy: arms twitch and jitter a lot). The SDK's fix: joints re-centred on this pose.
+    Logger::Info("[Delirium] {}: {} joints re-centred on its pose.", p_Name, nm_agent_recentre_joint(b.m_Agent, -1));
 
     Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Base == m_Wilma ? "Wilma" : "Homer", n,
         s_N);
@@ -1909,7 +1921,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             const bool s_On = GameRagdollOn(b.m_Char);
 
             if ((b.m_Recover -= p_Dt) <= 0.f || !s_On || b.m_Ragdoll || static_cast<ZActor*>(b.m_Char)->IsDead()) {
-                if (s_On && !b.m_Ragdoll && !static_cast<ZActor*>(b.m_Char)->IsDead() && Functions::ZHM5BaseCharacter_DeactivateRagdoll)
+                if (!b.m_Ragdoll && !static_cast<ZActor*>(b.m_Char)->IsDead() && Functions::ZHM5BaseCharacter_DeactivateRagdoll)
                     Functions::ZHM5BaseCharacter_DeactivateRagdoll->Call(b.m_Char);
 
                 Logger::Info("[Delirium] {}: up ({}).", b.m_Name, s_On ? "timed out" : "Hitman's get-up done");
@@ -2129,13 +2141,13 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 }
             }
 
-            if (!b.m_Npc || b.m_Ragdoll || b.m_Now.size() < 3)
+            if (!b.m_Npc || b.m_Ragdoll || b.m_Recover > 0.f || b.m_Now.size() < 3)
                 continue;
 
             SVector3 s_D = V(b.m_Now.data()) - s_Hips;
             s_D.z = 0.f;
 
-            if (s_D.Length() < 0.95f && s_Vel.Length() > 0.6f && s_Vel.Dot(s_D) > 0.f) {
+            if (s_D.Length() < 0.95f && s_Vel.Length() > 2.5f && s_Vel.Dot(s_D) > 0.f) {
                 SetRagdoll(b, true);
                 const SVector3 s_Push = s_Vel.Normalized() * 100.f;
                 const float s_F[3] = {s_Push.x, s_Push.y, 0.f};
