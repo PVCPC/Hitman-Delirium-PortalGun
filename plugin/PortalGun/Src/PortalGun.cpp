@@ -550,7 +550,8 @@ void PortalGun::DrawPortalTab() {
     if (ImGui::Button(ICON_MD_CLEAR " CLEAR"))
         m_RequestClear = true;
 
-    ImGui::Checkbox("Rectangle portals", &g_Square);
+    if (ImGui::Checkbox("Rectangle portals", &g_Square))
+        dp_set_rect(g_Square ? 1 : 0);
     ImGui::Checkbox("See-through portals", &m_SeeThrough);
     ImGui::SameLine();
     ImGui::Checkbox("Show portal cameras", &m_ShowCameras);

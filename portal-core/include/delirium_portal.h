@@ -15,6 +15,8 @@ typedef struct DpHit { float point[3]; float normal[3]; float distance; } DpHit;
 typedef bool (*DpRay)(void* ctx, const float (*origin)[3], const float (*dir)[3], float max, DpHit* hit);
 
 void dp_set_half(float w, float h);
+/* Rectangle portals (1) or ovals (0): which opening things cross through. */
+void dp_set_rect(int on);
 // 0 placed (out filled), 1 hit nothing, 2 doesn't fit, 3 overlaps the other. other / linked[2] / hit may be null.
 int dp_shoot(DpRay ray, void* ctx, const float (*origin)[3], const float (*dir)[3], float range,
     const DpFrame* other, const DpFrame* linked, DpFrame* out, DpHit* hit);

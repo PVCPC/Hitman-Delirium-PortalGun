@@ -10,7 +10,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 1 | 47's Homer doesn't line up with his model (A-pose, clipping into the ground) | built: inverted quaternions + fitted body. Billy: "good step forward, not quite" |
 | 2 | 47 shakes, worst when moving while ragdolled | built: movement blocked while down; whole 1/60 steps, pose drawn between the last two (no 60 Hz judder) |
 | 3 | 47's head twists a lot when ragdolled | open: neck/head bone map now logged, check next run |
-| 4 | 47 gets up with no animation (snaps upright); learned get-up doesn't work on him | partly: blend 1.2 s. Learned get-up runs but ends without standing him (net learned on Homer's proportions). Real fix: Hitman's own get-up clip, open |
+| 4 | 47 gets up with no animation (snaps upright); learned get-up doesn't work on him | partly: blend 1.2 s; NPCs now face the way the get-up ends (modding guide: feet if on the back, head if on the front). Real fix: Hitman's own get-up clip (no fitted-body get-up in the SDK yet, Pelican) |
 | 5 | Player can keep moving while ragdolled | built (same as 2) |
 | 6 | NPC models twist and contort around their Homer body | built: bodies fitted on the bind pose, not the walking frame (a bent elbow made a bent-armed body) |
 | 7 | NPC Homers hover above their bodies, shake violently | built: ground rays ignore characters; NM stepped every frame |
@@ -27,7 +27,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | # | Issue | Status |
 |---|---|---|
 | 12 | Walking through portals | confirmed: Billy walks through |
-| 13 | Half in, half out of a portal (Playroom ghosts) | open: Hitman's mesh is one piece; needs a second copy or clip planes |
+| 13 | Half in, half out of a portal (Playroom ghosts) | open: the Playroom draws a second copy of the mesh through the portal with a clip plane at the exit; Hitman needs a second instance of the character's mesh on the same bones |
 | 14 | Portal cameras white / overexposed | built: cameras are picture-in-picture cameras now (the game's tonemapped path) |
 | 15 | Portals too loud | built: volume slider, 0.3 by default |
 | 16 | Portals only stick to perfectly flat surfaces | built: 10 cm / 37 degree tolerance |
@@ -36,10 +36,10 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 26 | Game hitches when shooting or entering portals | built: placement casts about half the rays; the ragdoll dive (entering) is gone |
 | 27 | 47's Homer drops into the ground after shooting a portal | built (likely the sinking ground, #23) |
 | 28 | Portal 2 lets you clip the portal edges when walking in | built: trigger reaches 25 cm past the rim |
-| 29 | Square / rectangle portals; still the old October rings | built: "Rectangle portals" in the Portals tab (rim, walking through and see-through follow it). Delirium bodies still cross by the oval test. Playroom look: in progress |
+| 29 | Square / rectangle portals; still the old October rings | built: "Rectangle portals" in the Portals tab; walking, see-through and Delirium bodies (portal-core dp_set_rect, the Playroom's test) all follow it. Playroom rim look needs a shader: not possible with debug lines |
 | 30 | Shooting a portal froze 47 in place | built: the camera tablet sat in his chest and caught him; moved behind the portal |
 | 31 | Shooting a ped crashes the game (still, after the first fix) | built: the game's ragdoll is never blocked on NPCs now (its death code walked an empty list, HITMAN3+0x10c3bc4); a ped the game ragdolls is let go by Delirium |
-| 32 | Everyone's upper Homer twitches rapidly and violently; nobody's arms line up; peds twist around their Homer | built: UpdateBones runs several passes a frame (base, upper body / aim); we read whichever ran last, which flipped frame to frame. Now always the same (last) pass; the log names each pass's bones |
+| 32 | Everyone's upper Homer twitches rapidly and violently; nobody's arms line up; peds twist around their Homer | built: (Pelican) the body was created in Homer's arms-down pose but the rig baked against the bind pose (arms out): arm parts a hand's length off their bones. Parts now put on the bind pose before the rig; log says how far off they were. Also the same bone pass every frame |
 
 ## Trainer and menu
 

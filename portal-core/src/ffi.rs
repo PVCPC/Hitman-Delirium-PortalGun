@@ -60,6 +60,12 @@ unsafe fn v3(p: *const [f32; 3]) -> Vec3 {
 }
 
 /// The opening's half size (m); Portal 2's to begin with.
+/// Rectangle portals (1) or ovals (0): which opening things cross through.
+#[no_mangle]
+pub extern "C" fn dp_set_rect(on: i32) {
+    crate::RECT.store(on != 0, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[no_mangle]
 pub extern "C" fn dp_set_half(w: f32, h: f32) {
     *HALF.lock().unwrap() = Vec2::new(w, h).clamp(Vec2::splat(0.2), Vec2::splat(5.0));

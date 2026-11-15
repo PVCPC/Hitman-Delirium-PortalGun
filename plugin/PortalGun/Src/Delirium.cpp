@@ -1074,6 +1074,31 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     const float s_At[3] = {s_Hips.x, s_Hips.y, s_Floor};
     b.m_Agent = nm_agent_create(b.m_Build, s_At, 0.f, 0.37f);
 
+    if (b.m_Agent) {
+        // The fitted build stands in the skeleton's bind pose (nm_build_part_frame): every part put there.
+        float s_Worst = 0.f;
+        int s_WorstPart = -1;
+
+        for (int i = 0; i < c_Parts; ++i) {
+            float s_P[3], s_R[4], s_AP[3], s_AR[4];
+            const float s_Zero[3] = {0.f, 0.f, 0.f};
+
+            if (!nm_build_part_frame(b.m_Build, i, s_P, s_R))
+                continue;
+
+            nm_agent_get_part_transform(b.m_Agent, i, s_AP, s_AR);
+            const float d = (V(s_P) - V(s_AP)).Length();
+
+            if (d > s_Worst)
+                s_Worst = d, s_WorstPart = i;
+
+            nm_agent_set_part_state(b.m_Agent, i, s_P, s_R, s_Zero, s_Zero);
+        }
+
+        Logger::Info("[Delirium] {}: parts put on the bind pose before the rig (furthest was part {}, {:.2f} m off).",
+            p_Name, s_WorstPart, s_Worst);
+    }
+
     b.m_Rig = b.m_Agent ? nm_rig_create(b.m_Agent, s_N, s_RigParents.data(), s_Rest.data(), s_Map.data()) : nullptr;
 
     if (!b.m_Rig) {
@@ -1172,6 +1197,18 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
             float s_Pos[3], s_Rot[4];
             nm_agent_get_part_transform(b->m_Agent, 0, s_Pos, s_Rot);
             SMatrix s_M = b->m_HeldRot;
+            float s_Head[3] = {};
+            int s_FaceUp = 0;
+            nm_agent_get_lying(b->m_Agent, s_Head, &s_FaceUp);
+            SVector3 s_Face(s_Head[0], s_Head[1], 0.f);
+
+            if (s_Face.Length() > 0.5f) {
+                s_Face = (s_FaceUp ? s_Face * -1.f : s_Face).Normalized();
+                s_M.YAxis = float4(s_Face.x, s_Face.y, 0.f, 0.f);
+                s_M.XAxis = float4(s_Face.y, -s_Face.x, 0.f, 0.f); // forward x up
+                s_M.ZAxis = float4(0.f, 0.f, 1.f, 0.f);
+            }
+
             s_M.Trans.x = s_Pos[0];
             s_M.Trans.y = s_Pos[1];
             const auto s_G = m_LastGround.find(b->m_Agent);

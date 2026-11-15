@@ -42,9 +42,14 @@ pub fn through(a: &Frame, b: &Frame) -> (Quat, impl Fn(Vec3) -> Vec3) {
     ((b.rot * FLIP * a.rot.inverse()).normalize(), move |p| b.at + b.rot * (FLIP * a.local(p)))
 }
 
-/// Inside the hole (oval), in a portal's own axes, for an opening of half size `half`.
+/// Rectangle portals instead of ovals (the Playroom's Shape; `dp_set_rect`).
+pub static RECT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Inside the hole (oval, or rectangle with `RECT`), in a portal's own axes, for an opening of half size `half`.
 pub fn in_hole(l: Vec3, half: Vec2) -> bool {
-    (l.truncate() / (half * OPEN)).length_squared() < 1.0
+    let q = (l.truncate() / (half * OPEN)).abs();
+
+    if RECT.load(std::sync::atomic::Ordering::Relaxed) { q.max_element() < 1.0 } else { q.length_squared() < 1.0 }
 }
 
 /// Through an open portal: `p` (its local z a frame ago `last`) crossed the plane inside the opening.
