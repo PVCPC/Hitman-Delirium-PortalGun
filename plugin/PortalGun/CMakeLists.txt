@@ -14,3 +14,9 @@ add_custom_target(portal_core COMMAND cargo build --release WORKING_DIRECTORY ${
 add_dependencies(PortalGun portal_core)
 target_include_directories(PortalGun PRIVATE ${PORTAL_CORE}/include)
 target_link_libraries(PortalGun PRIVATE ${PORTAL_CORE_LIB} ws2_32 userenv ntdll bcrypt)
+
+# Delirium (gta4nm.dll, the NM port): delay-loaded from mods/Delirium, so the mod runs without it.
+set(DELIRIUM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../delirium-master CACHE PATH "delirium-physics checkout")
+target_include_directories(PortalGun PRIVATE ${DELIRIUM_DIR}/rust/crates/gta4-nm-sdk/include)
+target_link_libraries(PortalGun PRIVATE ${DELIRIUM_DIR}/rust/target/release/gta4nm.dll.lib delayimp)
+target_link_options(PortalGun PRIVATE /DELAYLOAD:gta4nm.dll)

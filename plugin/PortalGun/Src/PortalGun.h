@@ -8,6 +8,7 @@
 #include "Glacier/ZPrimitives.h"
 
 #include "delirium_portal.h"
+#include "Delirium.h"
 
 #include <Glacier/ZCameraEntity.h>
 #include <Glacier/ZGeomEntity.h>
@@ -146,6 +147,7 @@ private:
     void UpdateViews(const ZEntityRef& p_Hitman);
     void DrawViews();
     PortalView m_Views[2];
+    Delirium m_Delirium;
     TResourcePtr<ZTemplateEntityFactory> m_ViewFactory;
     TResourcePtr<ZTemplateEntityBlueprintFactory> m_ViewBlueprint;
     bool m_ViewsFailed = false;

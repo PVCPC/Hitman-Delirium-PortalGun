@@ -279,6 +279,8 @@ void PortalGun::FindGames() {
         "[PortalGun] Portal 2: {}. GTA IV: {}.", m_Portal2Path.empty() ? "not found" : m_Portal2Path,
         m_Gta4Path.empty() ? "not found" : m_Gta4Path
     );
+
+    m_Delirium.Configure(m_ModDir / "Delirium", m_Gta4Path);
 }
 
 // PortalGun.seen next to the DLL: there once the window has been closed, with a line per game the user skipped.
@@ -509,6 +511,7 @@ void PortalGun::OnDrawMenu() {
         m_RequestClear = true;
 
     ImGui::Checkbox("See-through portals", &m_SeeThrough);
+    m_Delirium.DrawMenu();
 }
 
 void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
@@ -653,6 +656,19 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
         TryTeleport(m_Orange, m_Blue, s_HitmanSpatial, s_Trans);
 
     UpdateViews(s_LocalHitman.m_entityRef);
+
+    if (const auto s_Camera = Functions::GetCurrentCamera->Call()) {
+        const SMatrix s_Cam = s_Camera->GetObjectToWorldMatrix();
+        const ZEntityRef s_Me = s_LocalHitman.m_entityRef;
+        m_Delirium.Update(
+            s_Dt,
+            [&](const SVector3& p_From, const SVector3& p_To, SVector3& p_Hit, SVector3& p_Normal) {
+                return RayCast(p_From, p_To, s_Me, p_Hit, p_Normal);
+            },
+            ToVec3(s_Cam.Trans), (ToVec3(s_Cam.CameraBackward) * -1.f).Normalized(), ToVec3(s_PlayerTrans.Trans),
+            ToVec3(s_PlayerTrans.YAxis)
+        );
+    }
 }
 
 void PortalGun::StartFlight(const SVector3& p_Feet, const SVector3& p_Vel) {
@@ -1206,6 +1222,7 @@ SVector3 PortalGun::MapDirection(const SVector3& p_Dir, const SMatrix& p_In, con
 }
 
 void PortalGun::OnDraw3D(IRenderer* p_Renderer) {
+    m_Delirium.Draw3D(p_Renderer);
     DrawPortal(p_Renderer, m_Blue, c_BlueColor);
     DrawPortal(p_Renderer, m_Orange, c_OrangeColor);
 }
@@ -2012,6 +2029,7 @@ void PortalGun::ClearPortals() {
 
 DEFINE_PLUGIN_DETOUR(PortalGun, void, OnClearScene, ZEntitySceneContext* th, bool p_FullyUnloadScene) {
     DeleteViews();
+    m_Delirium.Clear();
     ClearPortals();
     m_GaveThisScene = false;
     m_SceneTime = 0.f;
