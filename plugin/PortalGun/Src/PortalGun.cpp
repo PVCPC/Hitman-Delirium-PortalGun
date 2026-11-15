@@ -32,6 +32,9 @@
 #include <Glacier/SExternalReferences.h>
 #include <Glacier/CompileReflection.h>
 
+#include "PortalLog.h"
+#define Logger PortalLog
+
 namespace {
     // Source units to metres, at Portal's player scale (Chell is 72 units tall = 1.83m, like 47).
     constexpr float c_Unit = 0.0254f;
@@ -240,6 +243,8 @@ void PortalGun::OnEngineInitialized() {
         Logger::Info("[PortalGun] Self-test armed.");
     }
 
+    PortalLog::Open(m_ModDir);
+    Logger::Info("[PortalGun] Loaded, built " __DATE__ " " __TIME__ ".");
     dp_set_half(c_HalfWidth, c_HalfHeight);
     FindGames();
     LoadSetup();
