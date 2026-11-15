@@ -5,6 +5,11 @@
 #include <Glacier/ZActor.h>
 #include <Glacier/ZOutfit.h>
 #include <Glacier/ZSpatialEntity.h>
+#include <Glacier/ZResource.h>
+#include <Glacier/ZEntity.h>
+#include <Glacier/ZModule.h>
+#include <Glacier/SExternalReferences.h>
+#include <Glacier/EntityFactory.h>
 #include <Globals.h>
 #include <Functions.h>
 #include <MinHook.h>
@@ -1417,14 +1422,18 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     const bool s_Shoot = KeyPressed(VK_NUMPAD5, s_K5);
     const bool s_Push = KeyPressed(VK_NUMPAD6, s_K6);
 
-    bool s_Spawn, s_Clear;
+    bool s_Spawn, s_Clear, s_Npc;
     std::vector<std::pair<int, std::string>> s_Fire;
     {
         std::scoped_lock s_Lock(m_Mutex);
         s_Spawn = std::exchange(m_WantSpawn, false);
+        s_Npc = std::exchange(m_WantNpc, false);
         s_Clear = std::exchange(m_WantClear, false);
         s_Fire = std::exchange(m_WantFire, {});
     }
+
+    if (s_Npc)
+        SpawnNpc(p_HitmanSpatial, p_Facing);
 
     if (s_Clear) {
         for (Ped& s_Ped : m_Peds)
@@ -1824,7 +1833,12 @@ void Delirium::DrawMenu() {
 
     std::scoped_lock s_Lock(m_Mutex);
 
-    if (ImGui::Button("Spawn ped"))
+    if (ImGui::Button("Spawn NPC"))
+        m_WantNpc = true;
+
+    ImGui::SameLine();
+
+    if (ImGui::Button("Spawn outline ped"))
         m_WantSpawn = true;
 
     ImGui::SameLine();
@@ -1889,4 +1903,82 @@ void Delirium::DrawMenu() {
 
     if (!m_Line.empty())
         ImGui::TextWrapped("%s", m_Line.c_str());
+}
+
+// A real Hitman NPC 3 m in front of 47, as the SDK's Assets mod spawns one (npcactor.entitytemplate), dressed as the
+// nearest NPC (its outfit, charset, variation). Delirium takes it like any NPC near 47 (Num1).
+void Delirium::SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facing) {
+    const auto s_Scene = Globals::Hitman5Module->m_pEntitySceneContext->m_pScene;
+
+    if (!s_Scene || !p_HitmanSpatial || !Globals::ActorManager) {
+        m_Line = "Can't spawn an NPC: no level.";
+        return;
+    }
+
+    // The outfit of the nearest NPC.
+    const SMatrix s_Me = p_HitmanSpatial->GetObjectToWorldMatrix();
+    const SVector3 s_MyPos(s_Me.Trans.x, s_Me.Trans.y, s_Me.Trans.z);
+    ZActor* s_Model = nullptr;
+    float s_Best = 1e9f;
+
+    for (const auto& s_Entry : Globals::ActorManager->m_activatedActors) {
+        ZActor* a = s_Entry.m_pInterfaceRef;
+        const auto s_Spatial = s_Entry.m_entityRef ? s_Entry.m_entityRef.QueryInterface<ZSpatialEntity>() : nullptr;
+
+        if (!a || !s_Spatial || a->IsDead())
+            continue;
+
+        const float4 t = s_Spatial->GetObjectToWorldMatrix().Trans;
+        const float d = (SVector3(t.x, t.y, t.z) - s_MyPos).Length();
+
+        if (d < s_Best)
+            s_Best = d, s_Model = a;
+    }
+
+    if (!s_Model) {
+        m_Line = "Can't spawn an NPC: no NPC in the level to copy the outfit of.";
+        return;
+    }
+
+    TResourcePtr<ZTemplateEntityFactory> s_Resource;
+    Globals::ResourceManager->GetResourcePtr(
+        s_Resource, ResId<"[assembly:/templates/gameplay/ai2/actors.template?/npcactor.entitytemplate].pc_entitytype">, 0);
+
+    if (!s_Resource) {
+        m_Line = "Can't spawn an NPC: the NPC template isn't loaded in this level.";
+        return;
+    }
+
+    ZEntityRef s_New;
+    SExternalReferences s_Refs;
+    Functions::ZEntityManager_NewEntity->Call(Globals::EntityManager, s_New, "", s_Resource, s_Scene.m_entityRef, s_Refs, -1);
+    ZActor* s_Actor = s_New ? s_New.QueryInterface<ZActor>() : nullptr;
+    ZSpatialEntity* s_Spatial = s_New ? s_New.QueryInterface<ZSpatialEntity>() : nullptr;
+
+    if (!s_Actor || !s_Spatial) {
+        m_Line = "Can't spawn an NPC: the game didn't make one.";
+        return;
+    }
+
+    static int s_Count = 0;
+    s_Actor->m_sActorName = std::format("Delirium NPC {}", ++s_Count);
+    s_Actor->m_bStartEnabled = true;
+    s_Actor->m_nOutfitCharset = s_Model->m_nOutfitCharset;
+    s_Actor->m_nOutfitVariation = s_Model->m_nOutfitVariation;
+    s_Actor->m_OutfitRepositoryID = s_Model->m_OutfitRepositoryID;
+    s_Actor->m_eRequiredVoiceVariation = EActorVoiceVariation::eAVV_Undefined;
+    s_Actor->Activate(0);
+
+    // 3 m ahead of 47, facing him.
+    SMatrix s_M = s_Me;
+    const SVector3 f = SVector3(p_Facing.x, p_Facing.y, 0.f).Normalized();
+    s_M.Trans.x += f.x * 3.f;
+    s_M.Trans.y += f.y * 3.f;
+    s_M.YAxis = float4(-f.x, -f.y, 0.f, 0.f);
+    s_M.XAxis = float4(-f.y, f.x, 0.f, 0.f);
+    s_M.ZAxis = float4(0.f, 0.f, 1.f, 0.f);
+    s_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
+
+    m_Line = std::format("Spawned {} (dressed as {}).", s_Actor->m_sActorName.c_str(), s_Model->m_sActorName.c_str());
+    Logger::Info("[Delirium] {}", m_Line);
 }

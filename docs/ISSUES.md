@@ -46,7 +46,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | # | Issue | Status |
 |---|---|---|
 | 18 | Menu is terrible | built: own window with Portals and Delirium tabs |
-| 19 | "Spawn ped" makes only an outline, not a real Hitman NPC | open: needs the game's NPC template to spawn a real actor |
+| 19 | "Spawn ped" makes only an outline, not a real Hitman NPC | built: "Spawn NPC" in the Delirium tab spawns a real Hitman NPC 3 m ahead (the SDK's npcactor template), dressed as the nearest NPC; Delirium takes it like any NPC (Num1). The old one is "Spawn outline ped" |
 | 20 | Hitman's own death ragdoll takes over Delirium bodies | built: ActivateRagdoll / ActivatePoweredRagdoll detoured |
 
 ## Assets

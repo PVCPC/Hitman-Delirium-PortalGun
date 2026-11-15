@@ -139,6 +139,8 @@ private:
     // Requests from the menu (UI thread), done on the game thread.
     std::mutex m_Mutex;
     bool m_WantSpawn = false;
+    bool m_WantNpc = false;
+    void SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facing);
     bool m_WantClear = false;
     std::vector<std::pair<int, std::string>> m_WantFire; // target (0 = 47), action
 
