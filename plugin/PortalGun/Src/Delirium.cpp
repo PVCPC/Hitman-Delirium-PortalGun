@@ -73,9 +73,6 @@ namespace {
     constexpr int c_MaxNpcs = 6;
     constexpr int c_MaxMeshes = 32;
     constexpr float c_GetUp = 1.2f; // s from lying to the animation
-    // ponytail: a downed NPC's game capsule is lifted over 47's head so he walks over it; the game's own switch for
-    // character collision (not in the SDK) would be the real fix.
-    constexpr float c_CapsuleLift = 2.5f;
 
     SVector3 V(const float* p) { return SVector3(p[0], p[1], p[2]); }
 
@@ -2165,14 +2162,16 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     for (Body& b : m_Bodies) {
         // Ragdolling: the character goes where its body goes (no walking off out of it), then the pose onto it.
         if (b.m_Ragdoll) {
-            // Followed: the entity is the game's ragdoll's (while it has one).
-            if (!b.m_Follow || !b.m_FollowSet) {
+            // 47 only. An NPC's entity is the game's: moved (and lifted 2.5 m) here every frame, its AI moved it back,
+            // and the pose (worked out against ours) jumped back and forth and up and down (Billy: "flying").
+            // The game's ragdoll (on at the knock-down) holds it still and off 47's way instead.
+            if (!b.m_Npc) {
                 float s_Pos[3], s_Rot[4];
                 nm_agent_get_part_transform(b.m_Agent, 0, s_Pos, s_Rot);
                 SMatrix s_M = b.m_HeldRot;
                 s_M.Trans.x = s_Pos[0];
                 s_M.Trans.y = s_Pos[1];
-                s_M.Trans.z = b.m_HeldZ + (b.m_Npc ? c_CapsuleLift : 0.f);
+                s_M.Trans.z = b.m_HeldZ;
                 b.m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
             }
 
