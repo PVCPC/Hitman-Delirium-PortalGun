@@ -14,6 +14,8 @@ typedef struct DpHit { float point[3]; float normal[3]; float distance; } DpHit;
 // Nearest solid hit along origin + t * dir, 0 <= t <= max: fill hit and return true. Should miss characters and props.
 typedef bool (*DpRay)(void* ctx, const float (*origin)[3], const float (*dir)[3], float max, DpHit* hit);
 
+/* The opening's half size (m). Default 0.813 x 1.422 (Portal 2's 32 x 56 in half sizes): the opening is 1.63 x 2.84 m,
+   the hole things cross through x0.83 of it. Clamped to 0.2-5 m. */
 void dp_set_half(float w, float h);
 /* Easy placement (1, the default): a shot Portal 2's rules turn down still opens where it hit if there's wall at its
    centre. 0: Portal 2's strict rules. */
