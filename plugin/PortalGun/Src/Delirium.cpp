@@ -1417,6 +1417,49 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
             nm_agent_set_part_state(b.m_Agent, i, s_P, s_R, s_Zero, s_Zero);
         }
 
+        if (b.m_PartRig[14] >= 0 && b.m_PartRig[15] >= 0) {
+            std::string s_Arm;
+
+            for (int s_Pt : {14, 15}) {
+                float p[3], q[4];
+                nm_build_part_frame(b.m_Build, s_Pt, p, q);
+                const float* w = &s_Rest[b.m_PartRig[s_Pt] * 7];
+                const Q s_Wq {w[3], w[4], w[5], w[6]}, s_Pq {q[0], q[1], q[2], q[3]};
+                const Q s_D = Norm(Mul(Conj(s_Wq), s_Pq));
+                s_Arm += std::format("part {}: bone rot ({:.3f} {:.3f} {:.3f} {:.3f}) at ({:.3f} {:.3f} {:.3f}), part rot ({:.3f} {:.3f} "
+                    "{:.3f} {:.3f}) at ({:.3f} {:.3f} {:.3f}), {:.0f} deg apart; ", s_Pt, w[3], w[4], w[5], w[6], w[0], w[1], w[2],
+                    q[0], q[1], q[2], q[3], p[0], p[1], p[2], 2.f * std::acos(std::min(1.f, std::abs(s_D.w))) * 57.2958f);
+
+                if (s_Pt == 14) {
+                    const SVector3 s_Off = Rot(Conj(s_Wq), V(p) - V(w));
+                    b.m_ArmOff[0] = s_Off.x, b.m_ArmOff[1] = s_Off.y, b.m_ArmOff[2] = s_Off.z;
+                    b.m_ArmOff[3] = s_D.x, b.m_ArmOff[4] = s_D.y, b.m_ArmOff[5] = s_D.z, b.m_ArmOff[6] = s_D.w;
+                    const SVector3 s_Line = (V(&s_Rest[b.m_PartRig[15] * 7]) - V(w)).Normalized();
+                    float s_Best = 180.f;
+                    char s_Ax = '?';
+
+                    for (int k = 0; k < 3; ++k) {
+                        const SVector3 s_Axis = Rot(s_Pq, SVector3(k == 0, k == 1, k == 2));
+                        const float s_A = std::acos(std::min(1.f, std::abs(s_Axis.Dot(s_Line)))) * 57.2958f;
+
+                        if (s_A < s_Best)
+                            s_Best = s_A, s_Ax = "XYZ"[k];
+                    }
+
+                    const SVector3 s_Y = Rot(s_Pq, SVector3(0.f, 1.f, 0.f));
+                    s_Arm += std::format("capsule Y {:.0f} deg off the shoulder-elbow line (nearest axis {} at {:.0f}); ",
+                        std::acos(std::min(1.f, std::abs(s_Y.Dot(s_Line)))) * 57.2958f, s_Ax, s_Best);
+                }
+            }
+
+            std::string s_J;
+
+            for (int k = 0; k < c_Parts; ++k)
+                s_J += std::format("{:.3f} {:.3f} {:.3f}, ", s_Joints[k * 3], s_Joints[k * 3 + 1], s_Joints[k * 3 + 2]);
+
+            Logger::Info("[Delirium] {}: bake check: {}joints fitted from: {}", p_Name, s_Arm, s_J);
+        }
+
         // Pelican's check: the upper arm on the A-pose bind reads ~1.0 of its range; ~0.4 means the parts aren't on it.
         float s_Ang[3];
         const float s_Arm = nm_agent_get_joint_angle(b.m_Agent, 14, s_Ang);
@@ -1851,6 +1894,21 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
         // Pelican's check, once a second: is the left upper arm (part 14) on its bone? Its centre's angle off the
         // shoulder-to-elbow line: ~0 pinned on the animation; ~35 the limit holding it out (not keyframed).
+        if (!b.m_Ragdoll && !b.m_ArmTargetLogged && b.m_PartRig[14] >= 0) {
+            b.m_ArmTargetLogged = true;
+            float p[3], q[4];
+            nm_agent_get_part_transform(b.m_Agent, 14, p, q);
+            const float* w = &b.m_Now[b.m_PartRig[14] * 7];
+            const Q s_Wq {w[3], w[4], w[5], w[6]};
+            const Q s_Tq = Norm(Mul(s_Wq, Q {b.m_ArmOff[3], b.m_ArmOff[4], b.m_ArmOff[5], b.m_ArmOff[6]}));
+            const SVector3 s_Tp = V(w) + Rot(s_Wq, V(b.m_ArmOff));
+            const Q s_D = Norm(Mul(Conj(s_Tq), Q {q[0], q[1], q[2], q[3]}));
+            Logger::Info("[Delirium] {}: first keyframed frame: part 14 at ({:.3f} {:.3f} {:.3f}) rot ({:.3f} {:.3f} {:.3f} {:.3f}); "
+                "bone x bake offset gives ({:.3f} {:.3f} {:.3f}) rot ({:.3f} {:.3f} {:.3f} {:.3f}): {:.3f} m, {:.0f} deg apart "
+                "(the step may not have run yet).", b.m_Name, p[0], p[1], p[2], q[0], q[1], q[2], q[3], s_Tp.x, s_Tp.y, s_Tp.z,
+                s_Tq.x, s_Tq.y, s_Tq.z, s_Tq.w, (V(p) - s_Tp).Length(), 2.f * std::acos(std::min(1.f, std::abs(s_D.w))) * 57.2958f);
+        }
+
         if ((b.m_ArmCheck -= p_Dt) <= 0.f && b.m_PartRig[14] >= 0 && b.m_PartRig[15] >= 0) {
             b.m_ArmCheck = 1.f;
             float p[3], q[4], s_Ang[3];

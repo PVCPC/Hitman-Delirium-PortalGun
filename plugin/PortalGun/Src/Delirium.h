@@ -100,7 +100,9 @@ private:
         std::vector<float> m_RigWorld;   // NM's rig bones' world frames this frame (7 floats each)
         std::vector<float> m_RigAtKill;
         int m_PartRig[21] = {};          // the first rig bone on each part (-1 none)
-        float m_ArmCheck = 1.f;          // s to the next arm check (Pelican's pinned-or-not)  // m_RigWorld as the mesh showed it when the game's ragdoll began
+        float m_ArmCheck = 1.f;          // s to the next arm check (Pelican's pinned-or-not)
+        float m_ArmOff[7] = {};          // part 14's frame under its rest bone at the bake (the rig's target offset)
+        bool m_ArmTargetLogged = false;  // m_RigWorld as the mesh showed it when the game's ragdoll began
         int m_Hit = 0;          // bullets NM has taken
         int m_Layout = -1;
         bool m_Npc = false;
