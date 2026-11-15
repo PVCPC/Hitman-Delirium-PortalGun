@@ -99,6 +99,8 @@ private:
 
     static SMatrix MapThroughPortal(const SMatrix& p_World, const SMatrix& p_In, const SMatrix& p_Out);
     static SMatrix ExitTransform(const SMatrix& p_PlayerTrans, const SMatrix& p_In, const SMatrix& p_Out);
+    static bool RayCastLevel(const SVector3& p_From, const SVector3& p_To, const ZEntityRef& p_Ignore, SVector3& p_Hit,
+        SVector3& p_Normal);
     static bool RayCast(
         const SVector3& p_From, const SVector3& p_To, const ZEntityRef& p_Ignore, SVector3& p_Hit, SVector3& p_Normal
     );

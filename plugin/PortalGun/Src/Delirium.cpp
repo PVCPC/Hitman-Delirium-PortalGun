@@ -765,6 +765,17 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         }
     }
 
+    // Which bones drive the neck (11) and head (12): only neck/neck1 and head should.
+    {
+        std::string s_Heads;
+
+        for (int i = 0; i < n; ++i)
+            if (const int s_P = nm_rig_part_for_name(s_Names[i].c_str()); s_P == 11 || s_P == 12)
+                s_Heads += std::format("{}->{} ", s_Names[i], s_P);
+
+        Logger::Info("[Delirium] {}: neck/head bones: {}", p_Name, s_Heads);
+    }
+
     // Animated or not: each limb bone's turn now against its bind pose (0 degrees every time: the buffer holds bind
     // values there, and the drawn pose comes from a later layer).
     {
@@ -887,7 +898,9 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     nm_rig_take(b.m_Rig, b.m_Agent, b.m_Now.data(), nullptr, 0.f);
 
     // On its animation exactly until hit or killed (GTA IV's way); a free half-ragdoll walking it sent them flying.
+    // Keyframed parts can't move, so a keyframed NPC stays out of the other bodies' contacts until it ragdolls.
     nm_agent_keyframe(b.m_Agent, "fb", 1);
+    nm_agent_collide_agents(b.m_Agent, p_Npc ? 0 : 1);
 
     Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Base == m_Wilma ? "Wilma" : "Homer", n,
         s_N);
@@ -962,17 +975,21 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
 
     if (p_On) {
         nm_agent_keyframe(b->m_Agent, "fb", 0);
+        nm_agent_collide_agents(b->m_Agent, 1);
+        const SMatrix s_M = b->m_Spatial->GetObjectToWorldMatrix();
+        b->m_HeldZ = s_M.Trans.z;
+        b->m_HeldRot = s_M;
     }
     else {
         // Back on his animation from where it is now, blended from the ragdoll's last pose (the get-up).
         Bones::Override(b->m_Anim, {});
-        b->m_Still = 0.f;
         b->m_Blend = b->m_Written.empty() ? 0.f : c_GetUp;
 
         if (!b->m_Now.empty())
             nm_rig_take(b->m_Rig, b->m_Agent, b->m_Now.data(), nullptr, 0.f);
 
         nm_agent_keyframe(b->m_Agent, "fb", 1);
+        nm_agent_collide_agents(b->m_Agent, b->m_Npc ? 0 : 1);
     }
 
     Logger::Info("[Delirium] {} ragdoll {}.", b->m_Name, p_On ? "on" : "off");
@@ -1201,7 +1218,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
             if (s_D.Length() < 0.6f && s_Vel.Length() > 1.f && s_Vel.Dot(s_D) > 0.f) {
                 SetRagdoll(b, true);
-                const SVector3 s_Push = s_Vel.Normalized() * (60.f * std::min(s_Vel.Length(), 6.f));
+                const SVector3 s_Push = s_Vel.Normalized() * 100.f;
                 const float s_F[3] = {s_Push.x, s_Push.y, 0.f};
                 const float s_At[3] = {b.m_Now[0], b.m_Now[1], b.m_Now[2] + 0.3f};
                 nm_agent_apply_push(b.m_Agent, s_At, s_F);
@@ -1299,18 +1316,32 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     // Down and still for a moment: up again (the dead stay down).
     for (Body& b : m_Bodies) {
         if (!b.m_Ragdoll || b.m_Dead) {
-            b.m_Still = 0.f;
+            b.m_GettingUp = false;
             continue;
         }
 
-        float s_Com[3], s_Vel[3];
-        nm_agent_get_com(b.m_Agent, s_Com, s_Vel);
-        const float s_Speed = std::sqrt(s_Vel[0] * s_Vel[0] + s_Vel[1] * s_Vel[1] + s_Vel[2] * s_Vel[2]);
-        b.m_Still = s_Speed < 0.3f ? b.m_Still + p_Dt : 0.f;
+        // Lying still: Delirium's learned get-up (the Playroom's, on his own muscles); stood up, back on the animation.
+        if (b.m_GettingUp) {
+            if (!nm_agent_learned_getup_running(b.m_Agent)) {
+                b.m_GettingUp = false;
+                Logger::Info("[Delirium] {} is up.", b.m_Name);
+                b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
+            }
 
-        if (b.m_Still > 1.5f) {
-            Logger::Info("[Delirium] {} gets up.", b.m_Name);
-            b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
+            continue;
+        }
+
+        if (nm_agent_should_get_up(b.m_Agent, 1.f) == 1) {
+            const std::string s_Net = (m_Dir / "getup.net").string();
+
+            if (nm_agent_learned_getup(b.m_Agent, s_Net.c_str()) >= 0 && nm_agent_learned_getup_running(b.m_Agent)) {
+                b.m_GettingUp = true;
+                Logger::Info("[Delirium] {} gets up.", b.m_Name);
+            }
+            else {
+                Logger::Info("[Delirium] {} gets up (no learned get-up: {}).", b.m_Name, LastError());
+                b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
+            }
         }
     }
 
@@ -1347,9 +1378,10 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         if (b.m_Ragdoll) {
             float s_Pos[3], s_Rot[4];
             nm_agent_get_part_transform(b.m_Agent, 0, s_Pos, s_Rot);
-            SMatrix s_M = b.m_Spatial->GetObjectToWorldMatrix();
+            SMatrix s_M = b.m_HeldRot;
             s_M.Trans.x = s_Pos[0];
             s_M.Trans.y = s_Pos[1];
+            s_M.Trans.z = b.m_HeldZ;
             b.m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
         }
     }

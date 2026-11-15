@@ -1,3 +1,4 @@
+#include <Glacier/ZActor.h>
 #include "PortalGun.h"
 
 #include <algorithm>
@@ -701,7 +702,7 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
         m_Delirium.Update(
             s_Dt,
             [&](const SVector3& p_From, const SVector3& p_To, SVector3& p_Hit, SVector3& p_Normal) {
-                return RayCast(p_From, p_To, s_Me, p_Hit, p_Normal);
+                return RayCastLevel(p_From, p_To, s_Me, p_Hit, p_Normal);
             },
             ToVec3(s_Cam.Trans), (ToVec3(s_Cam.CameraBackward) * -1.f).Normalized(), ToVec3(s_PlayerTrans.Trans),
             ToVec3(s_PlayerTrans.YAxis), s_LocalHitman.m_pInterfaceRef, s_HitmanSpatial
@@ -896,6 +897,40 @@ void PortalGun::PlacePortalInFrontOfPlayer(Portal& p_Portal, const SMatrix& p_Pl
     Logger::Info("[PortalGun] Portal placed at ({:.2f}, {:.2f}, {:.2f}).", s_Centre.x, s_Centre.y, s_Centre.z);
 }
 
+// Delirium's ground rays: the level only, never a character's collider (an NPC's own capsule laid its ground at
+// body height and the contacts threw it off; Pelican).
+static thread_local bool g_LevelOnly = false;
+
+static bool IsCharacter(const ZEntityRef& p_Hit, const SVector3& p_At) {
+    if (p_Hit.QueryInterface<ZActor>() || p_Hit.QueryInterface<ZHM5BaseCharacter>())
+        return true;
+
+    if (!Globals::ActorManager)
+        return false;
+
+    for (const auto& s_Entry : Globals::ActorManager->m_activatedActors) {
+        const auto s_Spatial = s_Entry.m_entityRef ? s_Entry.m_entityRef.QueryInterface<ZSpatialEntity>() : nullptr;
+
+        if (!s_Spatial)
+            continue;
+
+        const float4 t = s_Spatial->GetObjectToWorldMatrix().Trans;
+
+        if ((SVector3(t.x, t.y, t.z) - p_At).Length() < 3.f && (p_Hit == s_Entry.m_entityRef || p_Hit.IsAnyParent(s_Entry.m_entityRef)))
+            return true;
+    }
+
+    return false;
+}
+
+bool PortalGun::RayCastLevel(const SVector3& p_From, const SVector3& p_To, const ZEntityRef& p_Ignore, SVector3& p_Hit,
+    SVector3& p_Normal) {
+    g_LevelOnly = true;
+    const bool s_Ok = RayCast(p_From, p_To, p_Ignore, p_Hit, p_Normal);
+    g_LevelOnly = false;
+    return s_Ok;
+}
+
 bool PortalGun::RayCast(
     const SVector3& p_From, const SVector3& p_To, const ZEntityRef& p_Ignore, SVector3& p_Hit, SVector3& p_Normal
 ) {
@@ -939,6 +974,9 @@ bool PortalGun::RayCast(
             const ZEntityRef& s_Hit = s_Output.m_pBlockingSpatialEntity.m_entityRef;
             s_Ignored = s_Hit == p_Ignore || s_Hit.IsAnyParent(p_Ignore);
         }
+
+        if (!s_Ignored && g_LevelOnly && s_Output.m_pBlockingSpatialEntity.m_pInterfaceRef)
+            s_Ignored = IsCharacter(s_Output.m_pBlockingSpatialEntity.m_entityRef, ToVec3(s_Output.m_vPosition));
 
         if (!s_Ignored) {
             p_Hit = ToVec3(s_Output.m_vPosition);
