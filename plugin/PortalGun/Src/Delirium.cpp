@@ -1547,10 +1547,11 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             b.m_Dead = true;
             SetRagdoll(b, true);
 
+            // Shot: task_shot with health 0 kills and keeps the reaction (set_dead first would skip it).
             if (b.m_Shot)
                 ShootAtAim(b);
-
-            nm_agent_set_dead(b.m_Agent, 1);
+            else
+                nm_agent_set_dead(b.m_Agent, 1);
         }
     }
 
@@ -2042,6 +2043,9 @@ void Delirium::ShootAtAim(Body& b) {
 
     const float s_Dir[3] = {m_Aim.x, m_Aim.y, m_Aim.z};
     nm_agent_task_shot(b.m_Agent, m_World, "*", s_Part, s_At, s_Dir, 0.f);
+    // The bullet's push is the host's (task_shot doesn't): a pistol's, ~25 N s (Pelican: 15-40).
+    const float s_Push[3] = {m_Aim.x * 25.f, m_Aim.y * 25.f, m_Aim.z * 25.f};
+    nm_agent_apply_push(b.m_Agent, s_At, s_Push);
 }
 
 // 47 invincible / hidden from the AI, as the SDK's Player mod does it (an AI cripple entity's pins), once per level.
