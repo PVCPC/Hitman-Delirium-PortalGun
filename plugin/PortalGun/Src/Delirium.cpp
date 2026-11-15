@@ -1295,6 +1295,12 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         }
     }
 
+    std::fill(std::begin(b.m_PartRig), std::end(b.m_PartRig), -1);
+
+    for (size_t r = 0; r < s_Map.size(); ++r)
+        if (s_Map[r] >= 0 && s_Map[r] < c_Parts && b.m_PartRig[s_Map[r]] < 0)
+            b.m_PartRig[s_Map[r]] = static_cast<int>(r);
+
     // The pose it stands in now is the rest pose (an idle's: arms down, as Homer stands; Pelican's advice).
     s_Lap("map");
 
@@ -1839,6 +1845,20 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
         if (!b.m_Ragdoll)
             nm_rig_incoming(b.m_Rig, b.m_Agent, b.m_Now.data());
+
+        // Pelican's check, once a second: is the left upper arm (part 14) on its bone? Its centre's angle off the
+        // shoulder-to-elbow line: ~0 pinned on the animation; ~35 the limit holding it out (not keyframed).
+        if ((b.m_ArmCheck -= p_Dt) <= 0.f && b.m_PartRig[14] >= 0 && b.m_PartRig[15] >= 0) {
+            b.m_ArmCheck = 1.f;
+            float p[3], q[4], s_Ang[3];
+            nm_agent_get_part_transform(b.m_Agent, 14, p, q);
+            const SVector3 s_Sh = V(&b.m_Now[b.m_PartRig[14] * 7]), s_El = V(&b.m_Now[b.m_PartRig[15] * 7]);
+            const SVector3 s_Bone = (s_El - s_Sh).Normalized(), s_Part = (V(p) - s_Sh).Normalized();
+            const float s_Off = std::acos(std::clamp(s_Bone.Dot(s_Part), -1.f, 1.f)) * 57.2958f;
+            Logger::Info("[Delirium] {}: arm check: {}, upper arm {:.0f} deg off its bone ({:.2f} m from the shoulder), "
+                "joint at {:.2f} of its range.", b.m_Name, b.m_Ragdoll ? "ragdoll" : "keyframed on the animation", s_Off,
+                (V(p) - s_Sh).Length(), nm_agent_get_joint_angle(b.m_Agent, 14, s_Ang));
+        }
 
         // A kill in Hitman: he drops (Delirium's death, not the game's).
         // ponytail: the game's own death ragdoll still takes the body over; detour ActivateRagdoll to keep NM's.
