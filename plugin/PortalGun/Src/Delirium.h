@@ -112,6 +112,7 @@ private:
         // Killed: the game's death ragdoll kept, its bodies made kinematic and moved onto NM's bones each frame.
         bool m_Follow = false, m_FollowGone = false;
         float m_Recover = 0.f; // s left of Hitman's own get-up (its powered ragdoll + clip) running
+        float m_UpGrace = 0.f; // after Hitman's get-up: its ragdoll flag settles before a new knock-down counts
         void* m_FollowSet = nullptr;     // the ragdoll's body set followed (re-read every frame)
         std::vector<int> m_FollowRig;    // each ragdoll body's rig bone (-1: left to the game)
         std::vector<float> m_FollowOff;  // each body's frame under that bone (7 floats)

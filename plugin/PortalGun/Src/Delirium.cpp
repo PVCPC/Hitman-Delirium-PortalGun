@@ -1877,7 +1877,7 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
 
             // Hitman's own get-up from where its ragdoll lies (on NM's body); no clip: just off.
             if (StartRecovery(b->m_Char)) {
-                b->m_Recover = 6.f;
+                b->m_Recover = 10.f; // 6 s timed out mid get-up
                 Logger::Info("[Delirium] {}: Hitman's get-up.", b->m_Name);
             }
             else
@@ -2111,15 +2111,21 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     // Hitman's get-up runs on its powered ragdoll: that isn't a kill (unless it died meanwhile).
     for (Body& b : m_Bodies)
+        b.m_UpGrace = std::max(0.f, b.m_UpGrace - p_Dt);
+
+    for (Body& b : m_Bodies)
         if (b.m_Recover > 0.f) {
             GameTook(b.m_Char);
             const bool s_On = GameRagdollOn(b.m_Char);
 
             if ((b.m_Recover -= p_Dt) <= 0.f || !s_On || b.m_Ragdoll || static_cast<ZActor*>(b.m_Char)->IsDead()) {
-                if (!b.m_Ragdoll && !static_cast<ZActor*>(b.m_Char)->IsDead())
+                // Its ragdoll already off: no deactivate (the same frame then saw it on again and knocked the NPC
+                // straight back down, 5 of Billy's 13 get-ups).
+                if (s_On && !b.m_Ragdoll && !static_cast<ZActor*>(b.m_Char)->IsDead())
                     OurDeactivate(b.m_Char);
 
                 GameTook(b.m_Char);
+                b.m_UpGrace = 1.f;
                 Logger::Info("[Delirium] {}: up ({}).", b.m_Name, s_On ? "timed out" : "Hitman's get-up done");
                 b.m_Recover = 0.f;
             }
@@ -2127,8 +2133,10 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     // A kill: the game's death ragdoll runs (blocking it crashed), its bodies then follow NM's (Follow).
     for (Body& b : m_Bodies)
-        if (b.m_Npc && !b.m_Follow && (b.m_Recover <= 0.f || static_cast<ZActor*>(b.m_Char)->IsDead()) &&
-            (GameTook(b.m_Char), GameRagdollOn(b.m_Char))) {
+        if (b.m_Npc && !b.m_Follow &&
+            ((b.m_Recover <= 0.f && b.m_UpGrace <= 0.f) || static_cast<ZActor*>(b.m_Char)->IsDead()) &&
+            (GameTook(b.m_Char) || static_cast<ZActor*>(b.m_Char)->IsDead()) && GameRagdollOn(b.m_Char)) {
+            // A fresh activation by the game (or a death), not just its flag on again (Hitman's get-up ending).
             // Only a ragdoll that's really on (the end of Hitman's get-up left a stale "took" that set this on a standing
             // NPC: its next knock-down didn't stop its AI, the skeleton walked on). The body is Delirium's at once.
             Logger::Info("[Delirium] {}: the game ragdolled it; its ragdoll follows Delirium's body.", b.m_Name);
