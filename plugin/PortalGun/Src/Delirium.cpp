@@ -217,6 +217,14 @@ namespace {
             s_Start.push_back(static_cast<IPhysicsObject*>(s_Bodies[i])->GetTransform());
     }
 
+    // The game's own ragdoll is on (a kill, a shove): its handler's ragdoll has bodies.
+    bool GameRagdollOn(void* c) {
+        void* s_Bodies[64];
+        int s_Bones[64];
+        void* s_Set = nullptr;
+        return ReadRagdoll(c, &s_Set, s_Bodies, s_Bones) > 0;
+    }
+
     std::vector<SMatrix> TakeRagdollStart(void* c) {
         std::scoped_lock s_Lock(g_OwnedMutex);
         const auto it = g_RagdollStart.find(c);
@@ -402,6 +410,21 @@ void Delirium::Clear() {
 
     m_Bodies.clear();
     m_HitmanRagdoll = false;
+
+    for (ZEntityRef& e : m_SpawnedNpcs)
+        if (e) {
+            if (auto* a = e.QueryInterface<ZActor>())
+                a->Deactivate(0);
+
+            Functions::ZEntityManager_DeleteEntity->Call(Globals::EntityManager, e, {});
+        }
+
+    m_SpawnedNpcs.clear();
+    {
+        std::scoped_lock s_Owned(g_OwnedMutex);
+        g_RagdollStart.clear();
+        g_GameTook.clear();
+    }
 
     if (m_World)
         for (int i = 0; i < c_MaxMeshes; ++i)
@@ -1675,7 +1698,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     // A kill: the game's death ragdoll runs (blocking it crashed), its bodies then follow NM's (Follow).
     for (Body& b : m_Bodies)
-        if (b.m_Npc && !b.m_Follow && GameTook(b.m_Char)) {
+        if (b.m_Npc && !b.m_Follow && (GameTook(b.m_Char) || GameRagdollOn(b.m_Char))) {
             Logger::Info("[Delirium] {}: the game ragdolled it (killed); its ragdoll follows Delirium's body.", b.m_Name);
             b.m_Follow = true;
             b.m_RigAtKill = b.m_RigWorld; // last frame's: what the mesh showed as the ragdoll was made
@@ -2142,7 +2165,7 @@ void Delirium::Draw3D(IRenderer* p_Renderer) {
 
 void Delirium::DrawMenu() {
     ImGui::TextWrapped("%s", m_Status.c_str());
-    ImGui::Checkbox("47's Homer body", &m_HitmanBody);
+    ImGui::Checkbox("Delirium on 47 (test bed; off: NPCs only)", &m_HitmanBody);
     ImGui::SameLine();
     ImGui::Checkbox("Show bodies", &m_ShowBodies);
 
@@ -2287,6 +2310,7 @@ void Delirium::SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facin
     }
 
     static int s_Count = 0;
+    m_SpawnedNpcs.push_back(s_New);
     s_Actor->m_sActorName = std::format("Delirium NPC {}", ++s_Count);
     s_Actor->m_bStartEnabled = true;
     s_Actor->m_nOutfitCharset = s_Model->m_nOutfitCharset;

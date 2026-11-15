@@ -53,7 +53,7 @@ public:
     // The hotkeys' states (shown in the menu): Delirium on NPCs, and 47 ragdolling.
     bool m_NpcMode = false;
     bool m_HitmanRagdoll = false;
-    bool m_HitmanBody = true;
+    bool m_HitmanBody = false;
     bool m_ShowBodies = true;
 
 private:
@@ -166,6 +166,7 @@ private:
     std::mutex m_HitMutex;
     std::vector<void*> m_Hits;
     void SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facing);
+    std::vector<ZEntityRef> m_SpawnedNpcs; // deleted before the level goes (left, a replay crashed in their teardown)
     bool m_WantClear = false;
     std::vector<std::pair<int, std::string>> m_WantFire; // target (0 = 47), action
 
