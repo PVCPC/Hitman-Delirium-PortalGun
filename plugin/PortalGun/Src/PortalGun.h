@@ -133,6 +133,7 @@ private:
     DECLARE_PLUGIN_DETOUR(PortalGun, void, OnClearScene, ZEntitySceneContext* th, bool p_FullyUnloadScene);
     DECLARE_PLUGIN_DETOUR(PortalGun, bool, ZHM5ItemWeapon_FireProjectiles, ZHM5ItemWeapon* th, bool bMayStartSound);
     DECLARE_PLUGIN_DETOUR(PortalGun, bool, ZHM5ItemWeapon_IsFiring, IFirearm* th);
+    DECLARE_PLUGIN_DETOUR(PortalGun, bool, ZActor_YouGotHit, IBaseCharacter* th, const SHitInfo& hitInfo);
     DECLARE_PLUGIN_DETOUR(PortalGun, void, ZHM5ItemWeapon_SetBulletsInMagazine, IFirearm* th, int32_t nBullets);
     DECLARE_PLUGIN_DETOUR(PortalGun, bool, ZInputAction_Digital, ZInputAction* th, int32_t controllerId);
     DECLARE_PLUGIN_DETOUR(PortalGun, float, ZInputAction_Analog, ZInputAction* th, int32_t controllerId);

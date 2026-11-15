@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -91,6 +92,7 @@ private:
         std::vector<float> m_World;    // every bone's world frame this frame (7 floats each)
         bool m_Dead = false;
         bool m_Shot = false; // the game ragdolled it (shot): NM takes the hit
+        int m_Hit = 0;          // bullets NM has taken
         int m_Layout = -1;
         bool m_Npc = false;
         bool m_Ragdoll = false;
@@ -147,6 +149,14 @@ private:
     ZEntityRef m_Cripple;
     void UpdateCripple();
     void ShootAtAim(Body& b);
+public:
+    // 47 fired a gun (eWeaponType) / something hit a character: from the game's hooks, any thread.
+    void Fired(int p_Type) { m_Weapon = p_Type; }
+    void Hit(void* p_Char) { std::scoped_lock s_Lock(m_HitMutex); m_Hits.push_back(p_Char); }
+private:
+    std::atomic<int> m_Weapon {0};
+    std::mutex m_HitMutex;
+    std::vector<void*> m_Hits;
     void SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facing);
     bool m_WantClear = false;
     std::vector<std::pair<int, std::string>> m_WantFire; // target (0 = 47), action

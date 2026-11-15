@@ -1439,6 +1439,19 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     UpdateCripple();
 
+    std::vector<void*> s_Hits;
+    {
+        std::scoped_lock s_Lock(m_HitMutex);
+        s_Hits.swap(m_Hits);
+    }
+
+    for (void* c : s_Hits)
+        for (Body& b : m_Bodies)
+            if (b.m_Char == c && b.m_Npc) {
+                SetRagdoll(b, true);
+                ShootAtAim(b);
+            }
+
     // Numpad 1: Delirium on NPCs. Numpad 2: 47 ragdolls. Numpad 5 / 6: shoot / push the body you aim at.
     static bool s_K1, s_K2, s_K5, s_K6;
 
@@ -1548,9 +1561,10 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             SetRagdoll(b, true);
 
             // Shot: task_shot with health 0 kills and keeps the reaction (set_dead first would skip it).
-            if (b.m_Shot)
-                ShootAtAim(b);
-            else
+            if (b.m_Shot && b.m_Hit == 0)
+                ShootAtAim(b); // no hit seen (another way of killing): one shot's worth
+
+            if (b.m_Health >= 50.f)
                 nm_agent_set_dead(b.m_Agent, 1);
         }
     }
@@ -2041,11 +2055,20 @@ void Delirium::ShootAtAim(Body& b) {
             s_Best = s_Off, s_Part = i, std::copy_n(p, 3, s_At);
     }
 
+    // 47's gun as the table's (its push, damage and reaction set): Hitman's handgun, SMG, shotgun, the rest rifles.
+    // ponytail: a shotgun is one slug (nm_shotgun_fan + task_shotgun for its pellets); knives count as the last gun.
+    const int t = m_Weapon;
+    const char* s_Gun = t == 0 ? "pistol" : t == 3 ? "smg" : t == 7 ? "shotgun" : "rifle";
     const float s_Dir[3] = {m_Aim.x, m_Aim.y, m_Aim.z};
-    nm_agent_task_shot(b.m_Agent, m_World, "*", s_Part, s_At, s_Dir, 0.f);
-    // The bullet's push is the host's (task_shot doesn't): a pistol's, ~25 N s (Pelican: 15-40).
-    const float s_Push[3] = {m_Aim.x * 25.f, m_Aim.y * 25.f, m_Aim.z * 25.f};
-    nm_agent_apply_push(b.m_Agent, s_At, s_Push);
+    const float s_Left = nm_agent_shoot_weapon(b.m_Agent, m_World, nm_weapon_find(s_Gun), s_Part, s_At, s_Dir, b.m_Health);
+
+    if (s_Left >= 0.f)
+        b.m_Health = s_Left;
+
+    ++b.m_Hit;
+
+    if (b.m_Health < 50.f)
+        b.m_Dead = true;
 }
 
 // 47 invincible / hidden from the AI, as the SDK's Player mod does it (an AI cripple entity's pins), once per level.

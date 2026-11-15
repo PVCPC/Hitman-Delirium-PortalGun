@@ -280,6 +280,7 @@ void PortalGun::Init() {
     Hooks::ZEntitySceneContext_ClearScene->AddDetour(this, &PortalGun::OnClearScene);
     Hooks::ZHM5ItemWeapon_FireProjectiles->AddDetour(this, &PortalGun::ZHM5ItemWeapon_FireProjectiles);
     Hooks::ZHM5ItemWeapon_IsFiring->AddDetour(this, &PortalGun::ZHM5ItemWeapon_IsFiring);
+    Hooks::ZActor_YouGotHit->AddDetour(this, &PortalGun::ZActor_YouGotHit);
     Hooks::ZHM5ItemWeapon_SetBulletsInMagazine->AddDetour(this, &PortalGun::ZHM5ItemWeapon_SetBulletsInMagazine);
     Hooks::ZInputAction_Digital->AddDetour(this, &PortalGun::ZInputAction_Digital);
     Hooks::ZInputAction_Analog->AddDetour(this, &PortalGun::ZInputAction_Analog);
@@ -1844,13 +1845,24 @@ bool PortalGun::IsOurGun(const ZHM5ItemWeapon* p_Weapon) const {
 }
 
 DEFINE_PLUGIN_DETOUR(PortalGun, bool, ZHM5ItemWeapon_FireProjectiles, ZHM5ItemWeapon* th, bool bMayStartSound) {
-    if (!IsOurGun(th))
+    if (!IsOurGun(th)) {
+        // 47's real gun: Delirium's hits push and react as that kind of gun.
+        if (th && th->m_pOwner == SDK()->GetLocalPlayer().m_entityRef)
+            m_Delirium.Fired(static_cast<int>(th->m_WeaponType));
+
         return HookResult<bool>(HookAction::Continue());
+    }
 
     // Primary fire shoots blue. No bullet ever leaves the gun.
     m_RequestBlue = true;
 
     return HookResult<bool>(HookAction::Return(), true);
+}
+
+// Every hit on an NPC (each bullet of a burst), for Delirium's body.
+DEFINE_PLUGIN_DETOUR(PortalGun, bool, ZActor_YouGotHit, IBaseCharacter* th, const SHitInfo& hitInfo) {
+    m_Delirium.Hit(th);
+    return HookResult<bool>(HookAction::Continue());
 }
 
 DEFINE_PLUGIN_DETOUR(PortalGun, bool, ZHM5ItemWeapon_IsFiring, IFirearm* th) {
