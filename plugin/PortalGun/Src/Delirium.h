@@ -98,6 +98,7 @@ private:
         std::vector<int> m_FollowRig;    // each ragdoll body's rig bone (-1: left to the game)
         std::vector<float> m_FollowOff;  // each body's frame under that bone (7 floats)
         std::vector<float> m_RigWorld;   // NM's rig bones' world frames this frame (7 floats each)
+        std::vector<float> m_RigAtKill;  // m_RigWorld as the mesh showed it when the game's ragdoll began
         int m_Hit = 0;          // bullets NM has taken
         int m_Layout = -1;
         bool m_Npc = false;

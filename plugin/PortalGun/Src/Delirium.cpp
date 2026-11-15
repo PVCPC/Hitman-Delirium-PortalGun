@@ -191,9 +191,42 @@ namespace {
         return g_GameTook.erase(c) > 0;
     }
 
+    int ReadRagdoll(void* p_Char, void** p_Set, void** p_Bodies, int* p_Bones);
+
+    // Each owned NPC's ragdoll bodies as the game put them (on its bones, before a step moved them): Follow's offsets.
+    std::unordered_map<void*, std::vector<SMatrix>> g_RagdollStart;
+
     void HkRagdoll(ZHM5BaseCharacter* c, bool p_InMotion) {
-        if (GameRagdolls(c))
-            g_Ragdoll(c, p_InMotion);
+        if (!GameRagdolls(c))
+            return;
+
+        g_Ragdoll(c, p_InMotion);
+        std::scoped_lock s_Lock(g_OwnedMutex);
+
+        if (!g_GameTook.contains(c))
+            return;
+
+        void* s_Bodies[64];
+        int s_Bones[64];
+        void* s_Set = nullptr;
+        const int n = ReadRagdoll(c, &s_Set, s_Bodies, s_Bones);
+        std::vector<SMatrix>& s_Start = g_RagdollStart[c];
+        s_Start.clear();
+
+        for (int i = 0; i < n; ++i)
+            s_Start.push_back(static_cast<IPhysicsObject*>(s_Bodies[i])->GetTransform());
+    }
+
+    std::vector<SMatrix> TakeRagdollStart(void* c) {
+        std::scoped_lock s_Lock(g_OwnedMutex);
+        const auto it = g_RagdollStart.find(c);
+
+        if (it == g_RagdollStart.end())
+            return {};
+
+        std::vector<SMatrix> s_Out = std::move(it->second);
+        g_RagdollStart.erase(it);
+        return s_Out;
     }
 
     void HkPowered(ZHM5BaseCharacter* c, float t, bool p_InMotion, bool p_Upper, float a5, bool a6) {
@@ -976,6 +1009,9 @@ void Delirium::Follow(Body& b) {
         b.m_FollowRig.assign(n, -1);
         b.m_FollowOff.assign(n * 7, 0.f);
         std::string s_Log;
+        // Pelican: offsets from the kill frame (the bodies as made, the bones as shown), not after a game step.
+        const std::vector<SMatrix> s_Start = TakeRagdollStart(b.m_Char);
+        const bool s_AtKill = s_Start.size() == static_cast<size_t>(n) && b.m_RigAtKill.size() == b.m_RigWorld.size();
 
         for (int i = 0; i < n; ++i) {
             const std::string s_Class = ClassOf(s_Bodies[i]);
@@ -994,9 +1030,9 @@ void Delirium::Follow(Body& b) {
             }
 
             const int r = static_cast<int>(it - b.m_Bones.begin());
-            const SMatrix s_M = static_cast<IPhysicsObject*>(s_Bodies[i])->GetTransform();
+            const SMatrix s_M = s_AtKill ? s_Start[i] : static_cast<IPhysicsObject*>(s_Bodies[i])->GetTransform();
             const Q s_Bq = FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis);
-            const float* w = &b.m_RigWorld[r * 7];
+            const float* w = &(s_AtKill ? b.m_RigAtKill : b.m_RigWorld)[r * 7];
             const Q s_Wq {w[3], w[4], w[5], w[6]};
             const Q s_Oq = Norm(Mul(Conj(s_Wq), s_Bq));
             const SVector3 s_Op = Rot(Conj(s_Wq), SVector3(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z) - V(w));
@@ -1007,7 +1043,8 @@ void Delirium::Follow(Body& b) {
             s_Log += std::format("{}:bone {} {:.2f}m ", i, s_Bones[i], s_Op.Length());
         }
 
-        Logger::Info("[Delirium] {}: following its ragdoll's {} bodies ({}): {}", b.m_Name, n, ClassOf(s_Bodies[0]), s_Log);
+        Logger::Info("[Delirium] {}: following its ragdoll's {} bodies ({}, offsets {}): {}", b.m_Name, n, ClassOf(s_Bodies[0]),
+            s_AtKill ? "from the kill frame" : "from now", s_Log);
     }
 
     int s_Lost = 0;
@@ -1637,6 +1674,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         if (b.m_Npc && !b.m_Follow && GameTook(b.m_Char)) {
             Logger::Info("[Delirium] {}: the game ragdolled it (killed); its ragdoll follows Delirium's body.", b.m_Name);
             b.m_Follow = true;
+            b.m_RigAtKill = b.m_RigWorld; // last frame's: what the mesh showed as the ragdoll was made
 
             if (!b.m_Dead) {
                 b.m_Dead = true;
