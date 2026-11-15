@@ -2024,7 +2024,9 @@ bool PortalGun::OnGameAction(const char* p_Name, bool p_Active, bool p_Analog) {
     std::ranges::transform(s_Lower, s_Lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
     const bool s_IsAim = s_Lower.find("aim") != std::string::npos && s_Lower.find("assist") == std::string::npos;
-    const bool s_Block = s_IsAim && GunInHand();
+    // Down as a ragdoll: no walking him off out of his body (it shook).
+    const bool s_Move = s_Lower.find("move") != std::string::npos;
+    const bool s_Block = (s_IsAim && GunInHand()) || (s_Move && m_Delirium.HitmanDown());
 
     if (s_Block && p_Active)
         m_AimSeenFrame = m_Frame;

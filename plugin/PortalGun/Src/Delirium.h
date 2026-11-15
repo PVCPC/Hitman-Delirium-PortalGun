@@ -43,6 +43,9 @@ public:
     // 47 into a portal: he goes in as a ragdoll at this speed (false: he has no body, teleport him).
     bool Dive(const SVector3& p_Vel);
 
+    // 47 is down (ragdolled or getting up): his own movement is off.
+    bool HitmanDown();
+
     static void Unhook(); // unloading: the game's ragdoll back as it was
 
     // The hotkeys' states (shown in the menu): Delirium on NPCs, and 47 ragdolling.
@@ -69,6 +72,9 @@ private:
         NmBuild* m_Build = nullptr; // fitted to it, freed with it
         float m_PortalLast[2] = {};
         bool m_PortalHad = false;
+        std::vector<Bones::SQV> m_Written; // the ragdoll's last pose
+        float m_Blend = 0.f; // s left blending back to the animation
+        float m_Still = 0.f; // s at rest while ragdolled
         std::vector<int> m_Bones;      // Hitman bone of each rig bone (the pelvis and everything under it)
         std::vector<int32_t> m_Parents; // Hitman's parents, every bone
         std::vector<float> m_Now;      // the rig bones' world frames this frame (7 floats each)

@@ -34,6 +34,7 @@ namespace {
     constexpr int c_Chest = 10;
     constexpr int c_MaxNpcs = 6;
     constexpr int c_MaxMeshes = 32;
+    constexpr float c_GetUp = 0.7f; // s from lying to the animation
 
     SVector3 V(const float* p) { return SVector3(p[0], p[1], p[2]); }
 
@@ -656,6 +657,7 @@ void Delirium::WritePose(Body& p_Body) {
     Bones::SQV& l = s_Local[s_Bone];
     l.q[0] = g_Conj ? -s_Lq.x : s_Lq.x, l.q[1] = g_Conj ? -s_Lq.y : s_Lq.y, l.q[2] = g_Conj ? -s_Lq.z : s_Lq.z, l.q[3] = s_Lq.w;
     l.p[0] = s_Lp.x, l.p[1] = s_Lp.y, l.p[2] = s_Lp.z;
+    p_Body.m_Written = s_Local;
     Bones::Override(p_Body.m_Anim, std::move(s_Local));
 }
 
@@ -925,6 +927,11 @@ void Delirium::SetPortals(const DpFrame* p_Frames) {
         m_Portals[0] = p_Frames[0], m_Portals[1] = p_Frames[1];
 }
 
+bool Delirium::HitmanDown() {
+    const Body* b = Hitman();
+    return b && (b->m_Ragdoll || b->m_Blend > 0.f);
+}
+
 bool Delirium::Dive(const SVector3& p_Vel) {
     Body* b = Hitman();
 
@@ -957,8 +964,10 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
         nm_agent_keyframe(b->m_Agent, "fb", 0);
     }
     else {
-        // Back on his animation from where it is now.
+        // Back on his animation from where it is now, blended from the ragdoll's last pose (the get-up).
         Bones::Override(b->m_Anim, {});
+        b->m_Still = 0.f;
+        b->m_Blend = b->m_Written.empty() ? 0.f : c_GetUp;
 
         if (!b->m_Now.empty())
             nm_rig_take(b->m_Rig, b->m_Agent, b->m_Now.data(), nullptr, 0.f);
@@ -1285,6 +1294,48 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 std::sqrt(s_Vel[0] * s_Vel[0] + s_Vel[1] * s_Vel[1] + s_Vel[2] * s_Vel[2]));
             break;
         }
+    }
+
+    // Down and still for a moment: up again (the dead stay down).
+    for (Body& b : m_Bodies) {
+        if (!b.m_Ragdoll || b.m_Dead) {
+            b.m_Still = 0.f;
+            continue;
+        }
+
+        float s_Com[3], s_Vel[3];
+        nm_agent_get_com(b.m_Agent, s_Com, s_Vel);
+        const float s_Speed = std::sqrt(s_Vel[0] * s_Vel[0] + s_Vel[1] * s_Vel[1] + s_Vel[2] * s_Vel[2]);
+        b.m_Still = s_Speed < 0.3f ? b.m_Still + p_Dt : 0.f;
+
+        if (b.m_Still > 1.5f) {
+            Logger::Info("[Delirium] {} gets up.", b.m_Name);
+            b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
+        }
+    }
+
+    for (Body& b : m_Bodies) {
+        if (b.m_Ragdoll || b.m_Blend <= 0.f || b.m_Written.size() != b.m_Local.size())
+            continue;
+
+        b.m_Blend = std::max(0.f, b.m_Blend - p_Dt);
+        const float t = 1.f - b.m_Blend / c_GetUp;
+        const float k = t * t * (3.f - 2.f * t);
+        std::vector<Bones::SQV> s_Mix = b.m_Local;
+
+        for (size_t i = 0; i < s_Mix.size(); ++i) {
+            const float* a = b.m_Written[i].q;
+            float* q = s_Mix[i].q;
+            const float s_Sign = a[0] * q[0] + a[1] * q[1] + a[2] * q[2] + a[3] * q[3] < 0.f ? -1.f : 1.f;
+            const Q m = Norm(Q {a[0] + (q[0] * s_Sign - a[0]) * k, a[1] + (q[1] * s_Sign - a[1]) * k,
+                a[2] + (q[2] * s_Sign - a[2]) * k, a[3] + (q[3] * s_Sign - a[3]) * k});
+            q[0] = m.x, q[1] = m.y, q[2] = m.z, q[3] = m.w;
+
+            for (int c = 0; c < 3; ++c)
+                s_Mix[i].p[c] = b.m_Written[i].p[c] + (s_Mix[i].p[c] - b.m_Written[i].p[c]) * k;
+        }
+
+        Bones::Override(b.m_Anim, b.m_Blend > 0.f ? std::move(s_Mix) : std::vector<Bones::SQV> {});
     }
 
     // NM's pose out onto the ragdolling ones.
