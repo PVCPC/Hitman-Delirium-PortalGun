@@ -316,6 +316,10 @@ bool Delirium::Start() {
     if (std::filesystem::exists(m_Dir / "taskparams.txt"))
         nm_load_task_params((m_Dir / "taskparams.txt").string().c_str());
 
+    // GTA IV's own weapons (push, damage, reaction, a shotgun's pellets) for the shots 47 lands.
+    if (nm_weapons_load_info((std::filesystem::path(m_Gta4) / "common/data/weaponinfo.xml").string().c_str()) < 0)
+        Logger::Warn("[Delirium] GTA IV's weaponinfo.xml didn't load ({}); the SDK's four default guns.", LastError());
+
     m_Build = nm_build_load((m_Dir / "build.txt").string().c_str());
 
     if (!m_Build) {
@@ -2040,30 +2044,70 @@ void Delirium::SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facin
 }
 
 // A bullet into the part nearest 47's aim (the game's shot ragdolls it underneath; NM's body is what shows).
-void Delirium::ShootAtAim(Body& b) {
-    int s_Part = 0;
-    float s_Best = 1e9f, s_At[3] = {};
+// The part a ray from 47's eye along `p_Dir` passes nearest, and how near (m).
+static float NearestPart(NmAgent* a, const SVector3& p_Eye, const SVector3& p_Dir, int& p_Part, float* p_At) {
+    float s_Best = 1e9f;
 
     for (int i = 0; i < c_Parts; ++i) {
         float p[3], q[4];
-        nm_agent_get_part_transform(b.m_Agent, i, p, q);
-        const SVector3 d = V(p) - m_Eye;
-        const float t = std::max(0.f, d.x * m_Aim.x + d.y * m_Aim.y + d.z * m_Aim.z);
-        const float s_Off = (d - m_Aim * t).Length();
+        nm_agent_get_part_transform(a, i, p, q);
+        const SVector3 d = V(p) - p_Eye;
+        const float t = std::max(0.f, d.x * p_Dir.x + d.y * p_Dir.y + d.z * p_Dir.z);
+        const float s_Off = (d - p_Dir * t).Length();
 
         if (s_Off < s_Best)
-            s_Best = s_Off, s_Part = i, std::copy_n(p, 3, s_At);
+            s_Best = s_Off, p_Part = i, std::copy_n(p, 3, p_At);
     }
 
-    // 47's gun as the table's (its push, damage and reaction set): Hitman's handgun, SMG, shotgun, the rest rifles.
-    // ponytail: a shotgun is one slug (nm_shotgun_fan + task_shotgun for its pellets); knives count as the last gun.
-    const int t = m_Weapon;
-    const char* s_Gun = t == 0 ? "pistol" : t == 3 ? "smg" : t == 7 ? "shotgun" : "rifle";
-    const float s_Dir[3] = {m_Aim.x, m_Aim.y, m_Aim.z};
-    const float s_Left = nm_agent_shoot_weapon(b.m_Agent, m_World, nm_weapon_find(s_Gun), s_Part, s_At, s_Dir, b.m_Health);
+    return s_Best;
+}
 
-    if (s_Left >= 0.f)
-        b.m_Health = s_Left;
+void Delirium::ShootAtAim(Body& b) {
+    int s_Part = 0;
+    float s_At[3] = {};
+    NearestPart(b.m_Agent, m_Eye, m_Aim, s_Part, s_At);
+
+    // 47's gun as GTA IV's (weaponinfo.xml, loaded at start; the SDK's four defaults without it): its push, damage and
+    // reaction set. ponytail: knives and throws count as the last gun fired.
+    const int t = m_Weapon;
+    const char* s_Gun = t == 0 ? "pistol" : t == 3 ? "mp5" : t == 4 ? "sniperrifle" : t == 7 ? "shotgun" : "ak47";
+    int s_W = nm_weapon_find(s_Gun);
+
+    if (s_W < 0) // no game table: the defaults
+        s_W = nm_weapon_find(t == 0 ? "pistol" : t == 3 ? "smg" : t == 7 ? "shotgun" : "rifle");
+
+    const float s_Dir[3] = {m_Aim.x, m_Aim.y, m_Aim.z};
+    char s_Set[64] = {};
+    float v[7] = {};
+    nm_weapon_get(s_W, nullptr, 0, s_Set, sizeof(s_Set), v);
+
+    // A shotgun's pellets fanned as the game does; those that pass within 25 cm of a part hit it.
+    if (v[2] > 1.f) {
+        static int s_Seed = 12345;
+        std::vector<float> s_Fan((static_cast<size_t>(v[2]) + 1) * 3);
+        const int n = nm_shotgun_fan(s_Dir, v[5], v[6], static_cast<int>(v[2]), &s_Seed, s_Fan.data());
+        std::vector<float> s_Hits;
+
+        for (int k = 1; k < n; ++k) {
+            const SVector3 d = SVector3(s_Fan[k * 3] - m_Eye.x, s_Fan[k * 3 + 1] - m_Eye.y, s_Fan[k * 3 + 2] - m_Eye.z).Normalized();
+            int p = 0;
+            float at[3];
+
+            if (NearestPart(b.m_Agent, m_Eye, d, p, at) < 0.25f)
+                s_Hits.insert(s_Hits.end(), {static_cast<float>(p), at[0], at[1], at[2], d.x, d.y, d.z});
+        }
+
+        if (!s_Hits.empty()) {
+            b.m_Health = std::max(0.f, b.m_Health - v[1]);
+            nm_agent_task_shotgun(b.m_Agent, m_World, s_Set, s_Hits.data(), static_cast<int>(s_Hits.size() / 7), b.m_Health, v[0]);
+        }
+    }
+    else {
+        const float s_Left = nm_agent_shoot_weapon(b.m_Agent, m_World, s_W, s_Part, s_At, s_Dir, b.m_Health);
+
+        if (s_Left >= 0.f)
+            b.m_Health = s_Left;
+    }
 
     ++b.m_Hit;
 
