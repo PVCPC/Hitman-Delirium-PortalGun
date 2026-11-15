@@ -20,6 +20,7 @@
 #include <Glacier/ZHitman5.h>
 #include <Glacier/SGameUpdateEvent.h>
 #include <Glacier/ZCameraEntity.h>
+#include <Glacier/ZApplicationEngineWin32.h>
 #include <Glacier/ZInputActionManager.h>
 #include <Glacier/ZModule.h>
 #include <Glacier/ZCollision.h>
@@ -33,6 +34,7 @@
 #include <Glacier/CompileReflection.h>
 
 #include "PortalLog.h"
+#include "PortalViewJson.h"
 #define Logger PortalLog
 
 namespace {
@@ -375,6 +377,10 @@ void PortalGun::OnDrawUI(bool p_HasFocus) {
 
     if (m_SetupOpen)
         DrawSetup(p_HasFocus);
+
+    m_ScreenW = ImGui::GetIO().DisplaySize.x;
+    m_ScreenH = ImGui::GetIO().DisplaySize.y;
+    DrawViews();
 }
 
 void PortalGun::DrawSetup(bool p_HasFocus) {
@@ -501,6 +507,8 @@ void PortalGun::OnDrawMenu() {
 
     if (ImGui::Button(ICON_MD_CLEAR " PORTAL: CLEAR"))
         m_RequestClear = true;
+
+    ImGui::Checkbox("See-through portals", &m_SeeThrough);
 }
 
 void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
@@ -643,6 +651,8 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
 
     if (!TryTeleport(m_Blue, m_Orange, s_HitmanSpatial, s_Trans))
         TryTeleport(m_Orange, m_Blue, s_HitmanSpatial, s_Trans);
+
+    UpdateViews(s_LocalHitman.m_entityRef);
 }
 
 void PortalGun::StartFlight(const SVector3& p_Feet, const SVector3& p_Vel) {
@@ -2001,6 +2011,7 @@ void PortalGun::ClearPortals() {
 }
 
 DEFINE_PLUGIN_DETOUR(PortalGun, void, OnClearScene, ZEntitySceneContext* th, bool p_FullyUnloadScene) {
+    DeleteViews();
     ClearPortals();
     m_GaveThisScene = false;
     m_SceneTime = 0.f;
@@ -2009,6 +2020,206 @@ DEFINE_PLUGIN_DETOUR(PortalGun, void, OnClearScene, ZEntitySceneContext* th, boo
     m_AimWasHeld = false;
 
     return HookResult<void>(HookAction::Continue());
+}
+
+void PortalGun::SpawnViews() {
+    const auto s_Scene = Globals::Hitman5Module->m_pEntitySceneContext->m_pScene;
+
+    if (!s_Scene || !(*Globals::ApplicationEngineWin32)->m_bSceneLoaded)
+        return;
+
+    // Half the screen's resolution: same shape as the screen, so screen positions are texture positions.
+    std::string s_Json = c_PortalViewJson;
+    const auto s_Put = [&](const char* p_Key, uint32_t p_Value) {
+        s_Json.replace(s_Json.find(p_Key), 3, std::to_string(p_Value));
+    };
+    s_Put("@W@", std::max(64u, static_cast<uint32_t>(m_ScreenW * 0.5f)));
+    s_Put("@H@", std::max(64u, static_cast<uint32_t>(m_ScreenH * 0.5f)));
+
+    if (!m_ViewFactory && !SDK()->LoadQnEntity(ZString(s_Json), m_ViewBlueprint, m_ViewFactory)) {
+        Logger::Error("[PortalGun] See-through portals: couldn't load the camera entity.");
+        m_ViewsFailed = true;
+        return;
+    }
+
+    std::scoped_lock s_Lock(m_ViewMutex);
+
+    for (int i = 0; i < 2; ++i) {
+        PortalView& s_View = m_Views[i];
+        SExternalReferences s_ExternalRefs;
+        Functions::ZEntityManager_NewEntity->Call(
+            Globals::EntityManager, s_View.m_Root, i == 0 ? ZString("PortalViewBlue") : ZString("PortalViewOrange"), m_ViewFactory,
+            s_Scene.m_entityRef, s_ExternalRefs, -1
+        );
+
+        const auto s_Bp = m_ViewBlueprint.GetResource();
+
+        if (!s_View.m_Root || !s_Bp) {
+            Logger::Error("[PortalGun] See-through portals: couldn't spawn the camera.");
+            m_ViewsFailed = true;
+            return;
+        }
+
+        if (const int s_Idx = s_Bp->GetSubEntityIndex(0xfeedb6fc4f5626ea); s_Idx != -1)
+            if (const auto s_Ent = s_Bp->GetSubEntity(s_View.m_Root.m_pObj, s_Idx))
+                s_View.m_Camera = TEntityRef<ZCameraEntity>(ZEntityRef(s_Ent));
+
+        if (const int s_Idx = s_Bp->GetSubEntityIndex(0xfeedbf5a41eb9c48); s_Idx != -1)
+            if (const auto s_Ent = s_Bp->GetSubEntity(s_View.m_Root.m_pObj, s_Idx))
+                s_View.m_Texture = TEntityRef<ZRenderDestinationTextureEntity>(ZEntityRef(s_Ent));
+
+        if (!s_View.m_Camera || !s_View.m_Texture) {
+            Logger::Error("[PortalGun] See-through portals: the camera or its texture is missing.");
+            m_ViewsFailed = true;
+            return;
+        }
+    }
+
+    Logger::Info("[PortalGun] See-through portals: cameras up ({}x{}).", m_ScreenW, m_ScreenH);
+}
+
+void PortalGun::DeleteViews() {
+    std::scoped_lock s_Lock(m_ViewMutex);
+
+    for (PortalView& s_View : m_Views) {
+        if (s_View.m_Root)
+            Functions::ZEntityManager_DeleteEntity->Call(Globals::EntityManager, s_View.m_Root, {});
+
+        s_View = {};
+    }
+}
+
+void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
+    const bool s_Both = m_Blue.m_Placed && m_Orange.m_Placed;
+
+    if (s_Both && m_SeeThrough && !m_Views[0].m_Root && !m_ViewsFailed)
+        SpawnViews();
+
+    std::scoped_lock s_Lock(m_ViewMutex);
+    const auto s_Camera = Functions::GetCurrentCamera->Call();
+
+    for (int i = 0; i < 2; ++i) {
+        PortalView& s_View = m_Views[i];
+
+        if (!s_View.m_Camera || !s_View.m_Texture)
+            continue;
+
+        s_View.m_Show = false;
+        const bool s_On = s_Both && m_SeeThrough && s_Camera;
+        s_View.m_Camera.m_entityRef.SetProperty("m_bVisible", s_On);
+        s_View.m_Texture.m_entityRef.SetProperty("m_bVisible", s_On);
+
+        if (!s_On)
+            continue;
+
+        const Portal& s_In = i == 0 ? m_Blue : m_Orange;
+        const Portal& s_Out = i == 0 ? m_Orange : m_Blue;
+        const SMatrix s_Cam = s_Camera->GetObjectToWorldMatrix();
+        const SVector3 s_Eye = ToVec3(s_Cam.Trans);
+
+        // Only from in front of it, and only when nothing is in the way.
+        const SVector3 s_Centre = ToVec3(s_In.m_Transform.Trans);
+        const SVector3 s_Normal = ToVec3(s_In.m_Transform.YAxis).Normalized();
+
+        if ((s_Eye - s_Centre).Dot(s_Normal) <= 0.02f)
+            continue;
+
+        SVector3 s_Hit, s_HitNormal;
+        const SVector3 s_Near = s_Centre + s_Normal * 0.05f;
+
+        if (RayCast(s_Eye, s_Near, p_Hitman, s_Hit, s_HitNormal) &&
+            (s_Hit - s_Eye).Length() < (s_Near - s_Eye).Length() - 0.1f)
+            continue;
+
+        // The player's camera put through the portal, looking out of the other one.
+        const SMatrix s_Virtual = MapThroughPortal(s_Cam, s_In.m_Transform, s_Out.m_Transform);
+        s_View.m_Camera.m_pInterfaceRef->SetObjectToWorldMatrixFromEditor(s_Virtual);
+
+        // Clip away the wall behind the exit portal: start the view just short of it.
+        // ponytail: flat near plane, an oblique projection would clip exactly at the exit's surface.
+        const SVector3 s_Look = (ToVec3(s_Virtual.CameraBackward) * -1.f).Normalized();
+        const float s_Depth = (ToVec3(s_Out.m_Transform.Trans) - ToVec3(s_Virtual.Trans)).Dot(s_Look);
+        s_View.m_Camera.m_entityRef.SetProperty("m_fNearZ", std::clamp(s_Depth - 0.1f, 0.05f, 100.f));
+        s_View.m_Camera.m_entityRef.SetProperty("m_fFovYDeg", s_Camera->GetFovYDeg());
+        s_View.m_Camera.m_entityRef.SetProperty("m_fAspectWByH", m_ScreenW / std::max(1.f, m_ScreenH));
+        s_View.m_Show = true;
+    }
+}
+
+void PortalGun::DrawViews() {
+    std::scoped_lock s_Lock(m_ViewMutex);
+
+    if (!m_Views[0].m_Show && !m_Views[1].m_Show)
+        return;
+
+    ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
+    ImGui::SetNextWindowSize(ImVec2(m_ScreenW, m_ScreenH));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ImageBorderSize, 0.f);
+    ImGui::Begin(
+        "##PortalViews", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBackground |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav
+    );
+
+    // The oval as horizontal strips; each strip is the texture's quad with its corners moved onto the strip and
+    // its texture positions set to where they are on screen (the texture is the screen as seen through the portal).
+    constexpr int c_Strips = 24;
+
+    for (int i = 0; i < 2; ++i) {
+        const PortalView& s_View = m_Views[i];
+
+        if (!s_View.m_Show)
+            continue;
+
+        const auto s_Rt = reinterpret_cast<ZRenderDestination*>(s_View.m_Texture.m_pInterfaceRef->GetRenderDestination());
+
+        if (!s_Rt)
+            continue;
+
+        const SMatrix& s_M = (i == 0 ? m_Blue : m_Orange).m_Transform;
+        const auto s_Screen = [&](float p_X, float p_Z, ImVec2& p_Out) {
+            SVector2 s_P;
+
+            if (!SDK()->WorldToScreen(ToVec3(s_M.WVectorTransform(float4(p_X, 0.f, p_Z, 1.f))), s_P))
+                return false;
+
+            p_Out = ImVec2(s_P.x, s_P.y);
+            return true;
+        };
+
+        for (int k = 0; k < c_Strips; ++k) {
+            const float s_Z0 = c_HalfHeight * (-1.f + 2.f * k / c_Strips);
+            const float s_Z1 = c_HalfHeight * (-1.f + 2.f * (k + 1) / c_Strips);
+            const float s_W0 = c_HalfWidth * std::sqrt(std::max(0.f, 1.f - (s_Z0 / c_HalfHeight) * (s_Z0 / c_HalfHeight)));
+            const float s_W1 = c_HalfWidth * std::sqrt(std::max(0.f, 1.f - (s_Z1 / c_HalfHeight) * (s_Z1 / c_HalfHeight)));
+            ImVec2 s_P[4];
+
+            if (!s_Screen(-s_W0, s_Z0, s_P[0]) || !s_Screen(s_W0, s_Z0, s_P[1]) ||
+                !s_Screen(s_W1, s_Z1, s_P[2]) || !s_Screen(-s_W1, s_Z1, s_P[3]))
+                continue;
+
+            ImGui::SetCursorScreenPos(ImVec2(0.f, 0.f));
+            SDK()->ImGuiGameRenderTarget(s_Rt, ImVec2(1.f, 1.f));
+
+            ImDrawList* s_List = ImGui::GetWindowDrawList();
+
+            if (s_List->VtxBuffer.Size < 4)
+                continue;
+
+            ImDrawVert* s_Vtx = s_List->VtxBuffer.Data + s_List->VtxBuffer.Size - 4;
+
+            for (int v = 0; v < 4; ++v) {
+                s_Vtx[v].pos = s_P[v];
+                s_Vtx[v].uv = ImVec2(s_P[v].x / m_ScreenW, s_P[v].y / m_ScreenH);
+            }
+        }
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(3);
 }
 
 DEFINE_ZHM_PLUGIN(PortalGun);

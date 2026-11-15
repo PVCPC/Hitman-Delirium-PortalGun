@@ -9,6 +9,12 @@
 
 #include "delirium_portal.h"
 
+#include <Glacier/ZCameraEntity.h>
+#include <Glacier/ZGeomEntity.h>
+#include <Glacier/ZResource.h>
+#include <Glacier/EntityFactory.h>
+#include <mutex>
+
 #include <atomic>
 #include <filesystem>
 #include <string>
@@ -38,6 +44,16 @@ struct Portal {
 };
 
 // A physics object the portal gun has handled. Its motion is tracked so it can pass through portals.
+// What one portal shows: a hidden camera looking out of the other portal, rendering to a texture that's drawn
+// in this portal's oval on screen (screen-space, so the camera matches the player's).
+struct PortalView {
+    ZEntityRef m_Root;
+    TEntityRef<ZCameraEntity> m_Camera;
+    TEntityRef<ZRenderDestinationTextureEntity> m_Texture;
+    // Whether to draw it this frame (both portals up, 47's camera in front of it and nothing in the way).
+    bool m_Show = false;
+};
+
 struct TrackedBody {
     ZEntityRef m_Entity;
     SVector3 m_PrevPos;
@@ -123,6 +139,19 @@ private:
 private:
     Portal m_Blue;
     Portal m_Orange;
+
+    // See-through portals: [0] is drawn in blue (looks out of orange), [1] in orange.
+    void SpawnViews();
+    void DeleteViews();
+    void UpdateViews(const ZEntityRef& p_Hitman);
+    void DrawViews();
+    PortalView m_Views[2];
+    TResourcePtr<ZTemplateEntityFactory> m_ViewFactory;
+    TResourcePtr<ZTemplateEntityBlueprintFactory> m_ViewBlueprint;
+    bool m_ViewsFailed = false;
+    bool m_SeeThrough = true;
+    float m_ScreenW = 1920.f, m_ScreenH = 1080.f;
+    std::mutex m_ViewMutex;
 
     // Requests raised from the UI thread, consumed on the game thread.
     bool m_RequestBlue = false;
