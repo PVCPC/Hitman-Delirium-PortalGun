@@ -264,7 +264,17 @@ pub fn place(w: &dyn World, hit: Hit, shot_dir: Vec3, half: Vec2, others: &[Fram
         return Err(Fail::DoesNotFit);
     }
     let easy = EASY.load(std::sync::atomic::Ordering::Relaxed);
-    let at_hit = || if others.iter().any(|o| overlaps(&frame, half, o, half)) { Err(Fail::Overlap) } else { Ok(frame) };
+    let at_hit = || {
+        let (n, r, u) = (frame.normal(), frame.right(), frame.up());
+        let (x, y) = (half.x * 0.75, half.y * 0.75);
+        if ![(x, 0.0), (-x, 0.0), (0.0, y), (0.0, -y)].iter().all(|&(a, b)| surface_at(w, frame.at + r * a + u * b, n)) {
+            Err(Fail::DoesNotFit)
+        } else if others.iter().any(|o| overlaps(&frame, half, o, half)) {
+            Err(Fail::Overlap)
+        } else {
+            Ok(frame)
+        }
+    };
     let Some(at) = fit_on_surface(w, frame, half) else {
         return if easy { at_hit() } else { Err(Fail::DoesNotFit) };
     };
@@ -336,4 +346,83 @@ pub fn trace_shot(w: &dyn World, origin: Vec3, dir: Vec3, range: f32, half: Vec2
         return Trace { hit, dir: d };
     }
     Trace { hit: None, dir: d }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    /// Flat rectangles: centre, normal (unit), right and up half extents (vectors).
+    struct Walls(Vec<(Vec3, Vec3, Vec3, Vec3)>);
+
+    impl World for Walls {
+        fn ray(&self, o: Vec3, d: Vec3, max: f32) -> Option<Hit> {
+            self.0.iter().filter_map(|&(c, n, r, u)| {
+                let dn = d.dot(n);
+                if dn.abs() < 1e-6 {
+                    return None;
+                }
+                let t = (c - o).dot(n) / dn;
+                let p = o + d * t;
+                let l = p - c;
+                (t >= 0.0 && t <= max && l.dot(r).abs() <= r.length_squared() && l.dot(u).abs() <= u.length_squared())
+                    .then(|| Hit { point: p, normal: if dn < 0.0 { n } else { -n }, distance: t })
+            }).min_by(|a, b| a.distance.total_cmp(&b.distance))
+        }
+    }
+
+    /// A wall in the XZ plane facing -Y at y = 0, `w` x `h` m, its centre at `c`.
+    fn wall(c: Vec3, w: f32, h: f32) -> (Vec3, Vec3, Vec3, Vec3) {
+        (c, -Vec3::Y, Vec3::X * w * 0.5, Vec3::Z * h * 0.5)
+    }
+
+    fn shoot(world: &Walls, at: Vec3, others: &[Frame], easy: bool) -> Result<Frame, Fail> {
+        EASY.store(easy, Ordering::Relaxed);
+        let from = at - Vec3::Y * 3.0;
+        let hit = world.ray(from, Vec3::Y, 10.0).ok_or(Fail::NoHit)?;
+        place(world, hit, Vec3::Y, crate::HALF, others)
+    }
+
+    // One test: EASY is global, so the cases run in order.
+    #[test]
+    fn placement() {
+        let big = Walls(vec![wall(Vec3::new(0.0, 0.0, 2.0), 10.0, 6.0)]);
+
+        // 1) a wall's middle: placed, flush.
+        for easy in [false, true] {
+            let f = shoot(&big, Vec3::new(0.0, 0.0, 2.0), &[], easy).unwrap();
+            assert!(f.at.y.abs() < 0.03 && f.at.y <= 0.0, "flush: {f:?}");
+        }
+
+        // 2) near the side edge: strict slides it on; easy too (it fits once slid), never past the edge.
+        for easy in [false, true] {
+            let f = shoot(&big, Vec3::new(4.9, 0.0, 2.0), &[], easy).unwrap();
+            assert!(f.at.x + crate::HALF.x <= 5.0 + 0.01, "on the wall: {f:?}");
+        }
+
+        // 3) a 1.4 m wide wall (the opening's 1.6 m): strict won't; easy hangs it over, at most a quarter of its half width each side.
+        let narrow = Walls(vec![wall(Vec3::new(0.0, 0.0, 2.0), 1.4, 6.0)]);
+        assert_eq!(shoot(&narrow, Vec3::new(0.0, 0.0, 2.0), &[], false).unwrap_err(), Fail::DoesNotFit);
+        let f = shoot(&narrow, Vec3::new(0.0, 0.0, 2.0), &[], true).unwrap();
+        assert!(f.at.x.abs() < 0.01);
+        // ... and a wall too narrow for a quarter's overhang: no.
+        let strip = Walls(vec![wall(Vec3::new(0.0, 0.0, 2.0), 0.5, 6.0)]);
+        assert_eq!(shoot(&strip, Vec3::new(0.0, 0.0, 2.0), &[], true).unwrap_err(), Fail::DoesNotFit);
+
+        // 4) over the other portal: Overlap either way.
+        for easy in [false, true] {
+            let other = shoot(&big, Vec3::new(0.0, 0.0, 2.0), &[], easy).unwrap();
+            assert_eq!(shoot(&big, Vec3::new(0.1, 0.0, 2.0), &[other], easy).unwrap_err(), Fail::Overlap);
+        }
+
+        // 5) a bumpy wall: 1 cm steps every 10 cm stand out of it; it still counts (SLACK 8 u).
+        let mut bumps = vec![wall(Vec3::new(0.0, 0.0, 2.0), 10.0, 6.0)];
+        for k in -20..=20 {
+            bumps.push(wall(Vec3::new(k as f32 * 0.1, -0.01, 2.0), 0.05, 6.0));
+        }
+        assert!(shoot(&Walls(bumps), Vec3::new(0.0, 0.0, 2.0), &[], false).is_ok());
+
+        EASY.store(true, Ordering::Relaxed);
+    }
 }
