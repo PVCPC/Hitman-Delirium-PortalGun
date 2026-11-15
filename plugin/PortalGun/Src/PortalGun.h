@@ -9,6 +9,7 @@
 
 #include "delirium_portal.h"
 
+#include <atomic>
 #include <filesystem>
 #include <string>
 #include <unordered_set>
@@ -57,6 +58,7 @@ public:
     void OnEngineInitialized() override;
     void Init() override;
     void OnDrawMenu() override;
+    void OnDrawUI(bool p_HasFocus) override;
     void OnDraw3D(IRenderer* p_Renderer) override;
 
 private:
@@ -95,6 +97,9 @@ private:
     static SMatrix FromDpFrame(const DpFrame& p_Frame);
     static bool DpRayCast(void* p_Ctx, const float (*p_Origin)[3], const float (*p_Dir)[3], float p_Max, DpHit* p_Hit);
     void FindGames();
+    void LoadSetup();
+    void SaveSetup();
+    void BrowseFolder(int p_Game);
     static SMatrix MakeSurfaceFrame(const SVector3& p_Hit, const SVector3& p_Normal, const SVector3& p_AimDir);
     static void DrawPortal(IRenderer* p_Renderer, const Portal& p_Portal, const SVector4& p_Color);
 
@@ -143,6 +148,13 @@ private:
     std::string m_Gta4Path;
     char m_Portal2Typed[512] = {};
     char m_Gta4Typed[512] = {};
+    // The startup window: open, games skipped (Portal 2, GTA IV), a Browse running, its result (1 saved, 2/3 wrong
+    // folder for Portal 2 / GTA IV), the last error shown.
+    bool m_SetupOpen = false;
+    bool m_Skip[2] = {};
+    std::atomic<bool> m_Browsing = false;
+    std::atomic<int> m_BrowseResult = 0;
+    std::string m_SetupError;
 
     ZInputAction m_PlaceBlueAction;
     ZInputAction m_PlaceOrangeAction;

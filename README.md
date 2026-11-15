@@ -6,7 +6,7 @@ their speed kept. The portal code is [Delirium Physics](https://github.com/PVCPC
 
 **Needs your own copies.** Nothing from Portal 2 or GTA IV is in this repository or its downloads. The mod reads them
 from your installs: it finds them in your Steam libraries (or the folders Delirium already saved), and if it can't,
-the mod menu asks you to paste the folder.
+you paste or pick the folder in the mod's window.
 
 Not affiliated with or endorsed by IO Interactive, Valve, Rockstar Games or NaturalMotion.
 
@@ -14,7 +14,17 @@ Not affiliated with or endorsed by IO Interactive, Valve, Rockstar Games or Natu
 
 1. [ZHMModSDK](https://github.com/OrfeasZ/ZHMModSDK) and [Simple Mod Framework](https://github.com/atampy25/simple-mod-framework).
 2. `PortalGun.dll` into `HITMAN 3\Retail\mods`; `smf/PortalGun` into SMF's `Mods` folder, enable it, deploy.
-3. Start the game: the mod menu (`~`) shows whether it found Portal 2 and GTA IV.
+3. Start the game. The first time, a window shows which of your games it found (press `~` to use it). Each one adds
+   something, and either can be skipped:
+
+   | You provide | You get |
+   |---|---|
+   | Nothing | The portal gun, with stand-in looks (the SMG model, plain portal edges, no Portal sounds) |
+   | Portal 2 | Portal 2's gun and cube models, sounds and portal effects |
+   | GTA IV | Delirium's ragdoll physics for NPCs and bodies |
+   | Both | Everything |
+
+   Reopen it any time from the mod menu: **PORTAL: YOUR GAMES**.
 
 Controls: fire = blue, right click = orange (gun in hand); Ctrl+B / Ctrl+O shoot without it; F picks up and drops.
 

@@ -33,7 +33,9 @@ impl Game {
         let d = Path::new(dir);
         match self {
             Game::Portal2 => d.join("portal2/pak01_dir.vpk").is_file(),
-            Game::Gta4 => d.join("GTAIV.exe").is_file() && d.join("pc").is_dir(),
+            // The PC game, or a disc Delirium has already copied out (Xbox 360 / PS3), as Delirium's own check.
+            Game::Gta4 => d.join("GTAIV.exe").is_file() && d.join("pc").is_dir() || d.join("default.xex").is_file()
+                || d.join("ps3.rpf").is_file() && (d.join("eboot.elf").is_file() || d.join("EBOOT.BIN").is_file()),
         }
     }
 }

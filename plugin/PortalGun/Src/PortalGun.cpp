@@ -7,6 +7,9 @@
 #include <fstream>
 
 #include <Windows.h>
+#include <shobjidl.h>
+
+#include <thread>
 
 #include "Hooks.h"
 #include "Logging.h"
@@ -239,6 +242,7 @@ void PortalGun::OnEngineInitialized() {
 
     dp_set_half(c_HalfWidth, c_HalfHeight);
     FindGames();
+    LoadSetup();
 
     if (ZInputActionManager::AddBindings(s_Binds))
         Logger::Info("[PortalGun] Bindings added (Ctrl+B blue, Ctrl+O orange).");
@@ -270,31 +274,178 @@ void PortalGun::FindGames() {
     );
 }
 
-void PortalGun::OnDrawMenu() {
-    // Each game: found, or a box to paste its folder into.
-    const auto s_GameRow = [&](int p_Game, const char* p_Name, const char* p_Hint, std::string& p_Path, char* p_Typed) {
-        if (!p_Path.empty()) {
-            ImGui::Text("%s: %s", p_Name, p_Path.c_str());
-            return;
+// PortalGun.seen next to the DLL: there once the window has been closed, with a line per game the user skipped.
+void PortalGun::LoadSetup() {
+    std::ifstream s_File(m_ModDir / "PortalGun.seen");
+    const bool s_Seen = s_File.is_open();
+    std::string s_Line;
+
+    while (std::getline(s_File, s_Line)) {
+        if (s_Line == "skip portal2") m_Skip[0] = true;
+        if (s_Line == "skip gta4") m_Skip[1] = true;
+    }
+
+    // First start, or a game it needs is missing and wasn't skipped.
+    m_SetupOpen = !s_Seen || (m_Portal2Path.empty() && !m_Skip[0]) || (m_Gta4Path.empty() && !m_Skip[1]);
+}
+
+void PortalGun::SaveSetup() {
+    std::ofstream s_File(m_ModDir / "PortalGun.seen", std::ios::trunc);
+    if (m_Skip[0]) s_File << "skip portal2\n";
+    if (m_Skip[1]) s_File << "skip gta4\n";
+}
+
+// Windows' own folder picker, on its own thread so the game keeps running. The folder is checked and saved there;
+// the next frame picks it up.
+void PortalGun::BrowseFolder(int p_Game) {
+    if (m_Browsing.exchange(true))
+        return;
+
+    std::thread([this, p_Game] {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        IFileOpenDialog* s_Dialog = nullptr;
+
+        if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&s_Dialog)))) {
+            DWORD s_Options = 0;
+            s_Dialog->GetOptions(&s_Options);
+            s_Dialog->SetOptions(s_Options | FOS_PICKFOLDERS);
+            s_Dialog->SetTitle(p_Game == 0 ? L"Your Portal 2 folder" : L"Your GTA IV folder");
+            IShellItem* s_Item = nullptr;
+
+            if (SUCCEEDED(s_Dialog->Show(nullptr)) && SUCCEEDED(s_Dialog->GetResult(&s_Item))) {
+                PWSTR s_Path = nullptr;
+
+                if (SUCCEEDED(s_Item->GetDisplayName(SIGDN_FILESYSPATH, &s_Path))) {
+                    const std::u8string s_U8 = std::filesystem::path(s_Path).u8string();
+                    const std::string s_Utf8(reinterpret_cast<const char*>(s_U8.data()), s_U8.size());
+                    m_BrowseResult = dp_set_game(p_Game, m_ModDir.string().c_str(), s_Utf8.c_str()) ? 1 : 2 + p_Game;
+                    CoTaskMemFree(s_Path);
+                }
+
+                s_Item->Release();
+            }
+
+            s_Dialog->Release();
         }
 
-        ImGui::Text("%s not found. Paste its folder (%s):", p_Name, p_Hint);
-        ImGui::PushID(p_Game);
-        ImGui::InputText("##path", p_Typed, 512);
-        ImGui::SameLine();
+        CoUninitialize();
+        m_Browsing = false;
+    }).detach();
+}
 
-        if (ImGui::Button("USE")) {
-            if (dp_set_game(p_Game, m_ModDir.string().c_str(), p_Typed))
-                FindGames();
-            else
-                Logger::Warn("[PortalGun] That folder isn't {}.", p_Name);
-        }
+// The startup window, laid out like Delirium Physics Playroom's: each game found, or a box to paste or pick its
+// folder, or skip it. The portal gun works without either.
+void PortalGun::OnDrawUI(bool p_HasFocus) {
+    if (const int s_Result = m_BrowseResult.exchange(0)) {
+        m_SetupError = s_Result == 1 ? "" : s_Result == 2 ? "That folder isn't Portal 2." : "That folder isn't GTA IV.";
+        FindGames();
+    }
 
-        ImGui::PopID();
+    if (!m_SetupOpen)
+        return;
+
+    const ImVec2 s_Screen = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowSize(ImVec2(720.f, 0.f), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(s_Screen.x * 0.5f, s_Screen.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::Begin("Hitman-Delirium Portal Gun", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize);
+
+    if (!p_HasFocus)
+        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "Press ~ to use this window.");
+
+    ImGui::TextWrapped("The portal gun works on its own. Your own games add to it (they're not included):");
+    ImGui::Spacing();
+
+    struct Row {
+        const char* m_Name;
+        const char* m_Adds;
+        const char* m_Need;
+        const char* m_Hint;
     };
 
-    s_GameRow(0, "Portal 2", "the one with portal2\\pak01_dir.vpk", m_Portal2Path, m_Portal2Typed);
-    s_GameRow(1, "GTA IV", "the one with GTAIV.exe", m_Gta4Path, m_Gta4Typed);
+    static constexpr Row c_Rows[2] = {
+        {"Portal 2", "Adds Portal 2's gun and cube models, its sounds and its portal effects.",
+         "You need your own Portal 2 for PC (Steam).", "e.g. C:\\Program Files (x86)\\Steam\\steamapps\\common\\Portal 2"},
+        {"GTA IV", "Adds Delirium's ragdoll physics to NPCs and bodies: they stumble, brace and fall for real.",
+         "You need your own GTA IV: The Complete Edition for PC (Steam), the folder with GTAIV.exe in it. "
+         "A disc (.iso): open it once in Delirium Physics Playroom and it's found here.",
+         "e.g. C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grand Theft Auto IV\\GTAIV"},
+    };
+
+    for (int i = 0; i < 2; ++i) {
+        const Row& s_Row = c_Rows[i];
+        const std::string& s_Path = i == 0 ? m_Portal2Path : m_Gta4Path;
+        char* s_Typed = i == 0 ? m_Portal2Typed : m_Gta4Typed;
+
+        ImGui::PushID(i);
+        ImGui::BeginChild("row", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
+        ImGui::Text("%s", s_Row.m_Name);
+        ImGui::SameLine();
+
+        if (!s_Path.empty()) {
+            ImGui::TextColored(ImVec4(0.47f, 0.9f, 0.59f, 1.f), "found: %s", s_Path.c_str());
+        }
+        else if (m_Skip[i]) {
+            ImGui::TextDisabled("skipped");
+            ImGui::SameLine();
+
+            if (ImGui::SmallButton("Add it"))
+                m_Skip[i] = false;
+        }
+        else {
+            ImGui::TextColored(ImVec4(0.94f, 0.47f, 0.39f, 1.f), "not found");
+        }
+
+        ImGui::TextWrapped("%s", s_Row.m_Adds);
+
+        if (s_Path.empty() && !m_Skip[i]) {
+            ImGui::TextWrapped("%s", s_Row.m_Need);
+            ImGui::TextDisabled("Paste where it is, or pick it:");
+            ImGui::SetNextItemWidth(420.f);
+            ImGui::InputTextWithHint("##path", s_Row.m_Hint, s_Typed, 512);
+            ImGui::SameLine();
+
+            if (ImGui::Button("Use it")) {
+                if (dp_set_game(i, m_ModDir.string().c_str(), s_Typed)) {
+                    m_SetupError.clear();
+                    FindGames();
+                }
+                else {
+                    m_SetupError = std::format("That isn't {}: {}", s_Row.m_Name, s_Typed);
+                }
+            }
+
+            ImGui::SameLine();
+
+            if (ImGui::Button(m_Browsing ? "..." : "Browse"))
+                BrowseFolder(i);
+
+            ImGui::SameLine();
+
+            if (ImGui::Button("Skip"))
+                m_Skip[i] = true;
+        }
+
+        ImGui::EndChild();
+        ImGui::PopID();
+    }
+
+    if (!m_SetupError.empty())
+        ImGui::TextColored(ImVec4(0.94f, 0.47f, 0.39f, 1.f), "%s", m_SetupError.c_str());
+
+    ImGui::TextDisabled("You only do this once: it's remembered. Change it later from the mod menu.");
+
+    if (ImGui::Button("Done")) {
+        m_SetupOpen = false;
+        m_SetupError.clear();
+        SaveSetup();
+    }
+
+    ImGui::End();
+}
+
+void PortalGun::OnDrawMenu() {
+    if (ImGui::Button(ICON_MD_FOLDER " PORTAL: YOUR GAMES (PORTAL 2 / GTA IV)"))
+        m_SetupOpen = true;
 
     if (ImGui::Button(ICON_MD_ADD " PORTAL: GIVE PORTAL GUN"))
         m_RequestGive = true;
