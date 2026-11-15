@@ -41,6 +41,21 @@ public:
     void Draw3D(IRenderer* p_Renderer);
     void DrawMenu();
     void Clear();
+    struct Wall {
+        SVector3 m_Hit, m_N;
+        float m_Floor, m_Half;
+    };
+    // Each body's wall panels, kept between scans (rebuilt from scratch, a body that slipped a gap had its wall
+    // rebuilt on its far side) and dropped when it's far from them.
+    std::unordered_map<NmAgent*, std::vector<Wall>> m_Walls;
+    // Where each body's patch was last built (Pelican: a lying body's patch rebuilt under it shoved it up each time;
+    // it's rebuilt once the body has moved 0.3 m or the portals changed).
+    struct PatchAt {
+        SVector3 m_At;
+        bool m_Open;
+        DpFrame m_Portals[2];
+    };
+    std::unordered_map<NmAgent*, PatchAt> m_PatchAt;
     bool BodyAt(const SVector3& p_At) const; // a point on a downed NPC (its game ragdoll's bodies sit on its NM body)
     // The linked pair (null: not both open), for ragdolls going through and the holes in the ground.
     void SetPortals(const DpFrame* p_Frames);

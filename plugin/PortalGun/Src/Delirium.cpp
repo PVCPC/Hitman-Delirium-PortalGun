@@ -457,6 +457,8 @@ void Delirium::Clear() {
             nm_world_set_mesh(m_World, i, nullptr, 0, nullptr, 0, nullptr);
 
     m_Peds.clear();
+    m_Walls.clear();
+    m_PatchAt.clear();
     std::scoped_lock s_Lock(m_Mutex);
     m_Pose.clear();
     m_Names.clear();
@@ -524,6 +526,23 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
         float s_Pos[3], s_Rot[4];
         nm_agent_get_part_transform(s_Agents[p], 0, s_Pos, s_Rot);
 
+        {
+            const auto it = m_PatchAt.find(s_Agents[p]);
+            const SVector3 d = V(s_Pos) - (it != m_PatchAt.end() ? it->second.m_At : SVector3(1e9f, 0.f, 0.f));
+
+            if (it != m_PatchAt.end() && SVector3(d.x, d.y, 0.f).Length() < 0.3f && std::abs(d.z) < 0.3f &&
+                it->second.m_Open == m_PortalsOpen && !std::memcmp(it->second.m_Portals, m_Portals, sizeof(it->second.m_Portals)))
+                continue;
+
+            PatchAt& s_At = m_PatchAt[s_Agents[p]];
+            s_At.m_At = V(s_Pos);
+            s_At.m_Open = m_PortalsOpen;
+            std::memcpy(s_At.m_Portals, m_Portals, sizeof(s_At.m_Portals));
+        }
+
+        float s_Parts[c_Parts * 7];
+        nm_agent_get_part_transforms(s_Agents[p], s_Parts, c_Parts);
+
         std::vector<float> s_Verts;
         std::vector<uint32_t> s_Tris;
         const float s_Half = c_Spacing * (c_N - 1) * 0.5f;
@@ -584,11 +603,21 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
         // open portal: bodies go into it).
         const float s_Floor = s_Last->second;
 
-        for (int k = 0; k < 8; ++k) {
-            const float s_Ang = k * 6.2831853f / 8.f;
+        // 12 directions at three heights (the old 8 at two left gaps a limb or a flung body went through); panels widen
+        // with distance so neighbours overlap. No skipping walls near people any more: rays only see the level now, and
+        // that skip took the wall away wherever 47 stood next to it (Billy: pushed through walls).
+        std::vector<Wall>& s_Walls = m_Walls[s_Agents[p]];
+        const SVector3 s_Body(s_Pos[0], s_Pos[1], s_Floor);
+        std::erase_if(s_Walls, [&](const Wall& w) {
+            const SVector3 d(w.m_Hit.x - s_Body.x, w.m_Hit.y - s_Body.y, 0.f);
+            return d.Length() > 3.5f || std::abs(w.m_Floor - s_Floor) > 1.5f;
+        });
+
+        for (int k = 0; k < 12; ++k) {
+            const float s_Ang = k * 6.2831853f / 12.f;
             const SVector3 s_Dir(std::cos(s_Ang), std::sin(s_Ang), 0.f);
 
-            for (const float s_H : {0.4f, 1.2f}) {
+            for (const float s_H : {0.25f, 0.7f, 1.3f}) {
                 const SVector3 s_From(s_Pos[0], s_Pos[1], s_Floor + s_H);
                 SVector3 s_Hit, s_N;
 
@@ -598,22 +627,6 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
                 SVector3 n(s_N.x, s_N.y, 0.f);
 
                 if (n.Length() < 0.7f)
-                    continue;
-
-                bool s_NearSomeone = false;
-
-                for (const Body& o : m_Bodies) {
-                    if (o.m_Now.size() < 3 || o.m_Agent == s_Agents[p])
-                        continue;
-
-                    const float dx = o.m_Now[0] - s_Hit.x, dy = o.m_Now[1] - s_Hit.y;
-                    float s_P[3], s_R[4];
-                    nm_agent_get_part_transform(o.m_Agent, 0, s_P, s_R);
-                    const float ex = s_P[0] - s_Hit.x, ey = s_P[1] - s_Hit.y;
-                    s_NearSomeone = s_NearSomeone || dx * dx + dy * dy < 0.8f * 0.8f || ex * ex + ey * ey < 0.8f * 0.8f;
-                }
-
-                if (s_NearSomeone)
                     continue;
 
                 n = n.Normalized();
@@ -628,26 +641,66 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
                 if (s_Hole)
                     continue;
 
-                const SVector3 s_Side(-n.y, n.x, 0.f);
-                const uint32_t s_Base = static_cast<uint32_t>(s_Verts.size() / 3);
+                const float s_Dist = (s_Hit - s_From).Length();
+                bool s_Have = false;
 
-                for (const auto [sx, sz] : {std::pair {-0.4f, -0.3f}, {0.4f, -0.3f}, {0.4f, 2.2f}, {-0.4f, 2.2f}}) {
-                    const SVector3 v = s_Hit + s_Side * sx;
-                    s_Verts.insert(s_Verts.end(), {v.x, v.y, s_Floor + sz});
-                }
+                for (Wall& w : s_Walls)
+                    if ((w.m_Hit - s_Hit).Length() < 0.25f && w.m_N.Dot(n) > 0.9f) {
+                        w.m_Half = std::max(w.m_Half, std::max(0.6f, s_Dist * 0.3f));
+                        s_Have = true;
+                        break;
+                    }
 
-                // A slab 30 cm thick (a fast body went through a flat face between steps): front, back, top, ends.
-                for (const auto [sx, sz] : {std::pair {-0.4f, -0.3f}, {0.4f, -0.3f}, {0.4f, 2.2f}, {-0.4f, 2.2f}}) {
-                    const SVector3 v = s_Hit + s_Side * sx - n * 0.3f;
-                    s_Verts.insert(s_Verts.end(), {v.x, v.y, s_Floor + sz});
-                }
-
-                // NM's triangles collide on both sides (Pelican): one winding each.
-                const uint32_t f0 = s_Base, f1 = s_Base + 1, f2 = s_Base + 2, f3 = s_Base + 3;
-                const uint32_t b0 = s_Base + 4, b1 = s_Base + 5, b2 = s_Base + 6, b3 = s_Base + 7;
-                s_Tris.insert(s_Tris.end(), {f0, f1, f2, f0, f2, f3, b0, b2, b1, b0, b3, b2, f3, f2, b2, f3, b2, b3, f0, f3, b3,
-                    f0, b3, b0, f1, b1, b2, f1, b2, f2});
+                if (!s_Have && s_Walls.size() < 64)
+                    s_Walls.push_back({s_Hit, n, s_Floor, std::max(0.6f, s_Dist * 0.3f)});
             }
+        }
+
+        // Portals opened since: no wall in them.
+        if (m_PortalsOpen)
+            std::erase_if(s_Walls, [&](const Wall& w) {
+                for (const DpFrame& f : m_Portals) {
+                    const float s_Behind[3] = {w.m_Hit.x - w.m_N.x * 0.05f, w.m_Hit.y - w.m_N.y * 0.05f, w.m_Hit.z};
+
+                    if (dp_crossed(&f, 1.f, &s_Behind))
+                        return true;
+                }
+
+                return false;
+            });
+
+        for (const Wall& w : s_Walls) {
+            const SVector3 s_Side(-w.m_N.y, w.m_N.x, 0.f);
+            const float h = w.m_Half;
+            constexpr float c_Thick = 0.8f;
+
+            // Pelican: contact is two-sided, a part past a slab's midline is pushed out its far side (the phasing). The
+            // slab is 0.8 m deep behind the hit face, and none is built through this body (it threw lying bodies out).
+            bool s_Through = false;
+
+            for (int k = 0; k < c_Parts && !s_Through; ++k) {
+                const SVector3 d = V(&s_Parts[k * 7]) - w.m_Hit;
+                const float s_In = -d.Dot(w.m_N), s_Along = d.Dot(s_Side), s_Up = s_Parts[k * 7 + 2] - w.m_Floor;
+                s_Through = s_In > -0.05f && s_In < c_Thick && std::abs(s_Along) < h && s_Up > -0.1f && s_Up < 2.2f;
+            }
+
+            if (s_Through)
+                continue;
+
+            const uint32_t s_Base = static_cast<uint32_t>(s_Verts.size() / 3);
+
+            // Front face at the hit, back face c_Thick behind it; bottom on the floor (Pelican), top 2.2 m up.
+            for (const float s_Back : {0.f, c_Thick})
+                for (const auto [sx, sz] : {std::pair {-h, 0.f}, {h, 0.f}, {h, 2.2f}, {-h, 2.2f}}) {
+                    const SVector3 v = w.m_Hit + s_Side * sx - w.m_N * s_Back;
+                    s_Verts.insert(s_Verts.end(), {v.x, v.y, w.m_Floor + sz});
+                }
+
+            // NM's triangles collide on both sides (Pelican): one winding each.
+            const uint32_t f0 = s_Base, f1 = s_Base + 1, f2 = s_Base + 2, f3 = s_Base + 3;
+            const uint32_t b0 = s_Base + 4, b1 = s_Base + 5, b2 = s_Base + 6, b3 = s_Base + 7;
+            s_Tris.insert(s_Tris.end(), {f0, f1, f2, f0, f2, f3, b0, b2, b1, b0, b3, b2, f3, f2, b2, f3, b2, b3, f0, f3, b3,
+                f0, b3, b0, f1, b1, b2, f1, b2, f2});
         }
 
         if (s_Tris.empty())
