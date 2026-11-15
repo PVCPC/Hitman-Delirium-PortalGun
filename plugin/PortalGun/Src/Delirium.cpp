@@ -148,6 +148,31 @@ namespace {
             g_Powered(c, t, p_InMotion, p_Upper, a5, a6);
     }
 
+    // Glacier's stored bone turns may be the inverse of a standard (Hamilton, world = parent * local) quaternion: the
+    // spine and standing legs look right either way, the arms and a run's legs don't. Found per game by a check at
+    // the first body (feet on the floor, head at head height, the bind pose's hands level), logged.
+    bool g_Conj = false;
+    bool g_ConjKnown = false;
+
+    // World frames (7 floats each) from parent-relative bones under a root.
+    void Fk(const std::vector<Bones::SQV>& p_L, const std::vector<int32_t>& p_Parents, Q p_RootQ, SVector3 p_RootP, bool p_Conj,
+        std::vector<float>& p_Out) {
+        p_Out.resize(p_L.size() * 7);
+
+        for (size_t i = 0; i < p_L.size(); ++i) {
+            const int s_Parent = p_Parents[i];
+            const float* w = s_Parent >= 0 ? &p_Out[s_Parent * 7] : nullptr;
+            const Q s_Pq = w ? Q {w[3], w[4], w[5], w[6]} : p_RootQ;
+            const SVector3 s_Pp = w ? V(w) : p_RootP;
+            const Bones::SQV& l = p_L[i];
+            const Q s_Lq = p_Conj ? Q {-l.q[0], -l.q[1], -l.q[2], l.q[3]} : Q {l.q[0], l.q[1], l.q[2], l.q[3]};
+            const Q q = Norm(Mul(s_Pq, s_Lq));
+            const SVector3 p = s_Pp + Rot(s_Pq, V(l.p));
+            float* o = &p_Out[i * 7];
+            o[0] = p.x, o[1] = p.y, o[2] = p.z, o[3] = q.x, o[4] = q.y, o[5] = q.z, o[6] = q.w;
+        }
+    }
+
     // An EngineFunction's address (its only member).
     void* AddressOf(const void* p_Function) { return p_Function ? *static_cast<void* const*>(p_Function) : nullptr; }
 
@@ -564,20 +589,7 @@ bool Delirium::Posed(Body& p_Body) {
     Q s_ObjQ;
     SVector3 s_ObjP;
     Root(p_Body, &s_ObjQ.x, s_ObjP);
-    const size_t n = p_Body.m_Local.size();
-    p_Body.m_World.resize(n * 7);
-
-    for (size_t i = 0; i < n; ++i) {
-        const int s_Parent = p_Body.m_Parents[i];
-        const float* w = s_Parent >= 0 ? &p_Body.m_World[s_Parent * 7] : nullptr;
-        const Q s_Pq = w ? Q {w[3], w[4], w[5], w[6]} : s_ObjQ;
-        const SVector3 s_Pp = w ? V(w) : s_ObjP;
-        const Bones::SQV& l = p_Body.m_Local[i];
-        const Q q = Norm(Mul(s_Pq, Q {l.q[0], l.q[1], l.q[2], l.q[3]}));
-        const SVector3 p = s_Pp + Rot(s_Pq, V(l.p));
-        float* o = &p_Body.m_World[i * 7];
-        o[0] = p.x, o[1] = p.y, o[2] = p.z, o[3] = q.x, o[4] = q.y, o[5] = q.z, o[6] = q.w;
-    }
+    Fk(p_Body.m_Local, p_Body.m_Parents, s_ObjQ, s_ObjP, g_Conj, p_Body.m_World);
 
     p_Body.m_Now.resize(p_Body.m_Bones.size() * 7);
 
@@ -602,8 +614,13 @@ void Delirium::WritePose(Body& p_Body) {
 
     std::vector<Bones::SQV> s_Local = p_Body.m_Local;
 
-    for (size_t r = 0; r < n; ++r)
-        std::copy_n(&s_Out[r * 4], 4, s_Local[p_Body.m_Bones[r]].q);
+    for (size_t r = 0; r < n; ++r) {
+        float* q = s_Local[p_Body.m_Bones[r]].q;
+        std::copy_n(&s_Out[r * 4], 4, q);
+
+        if (g_Conj)
+            q[0] = -q[0], q[1] = -q[1], q[2] = -q[2];
+    }
 
     const int s_Bone = p_Body.m_Bones[s_Hips];
     const int s_Parent = p_Body.m_Parents[s_Bone];
@@ -623,7 +640,7 @@ void Delirium::WritePose(Body& p_Body) {
     const Q s_Lq = Norm(Mul(Conj(s_Pq), Q {h[0], h[1], h[2], h[3]}));
     const SVector3 s_Lp = Rot(Conj(s_Pq), V(&s_Out[n * 4]) - s_Pp);
     Bones::SQV& l = s_Local[s_Bone];
-    l.q[0] = s_Lq.x, l.q[1] = s_Lq.y, l.q[2] = s_Lq.z, l.q[3] = s_Lq.w;
+    l.q[0] = g_Conj ? -s_Lq.x : s_Lq.x, l.q[1] = g_Conj ? -s_Lq.y : s_Lq.y, l.q[2] = g_Conj ? -s_Lq.z : s_Lq.z, l.q[3] = s_Lq.w;
     l.p[0] = s_Lp.x, l.p[1] = s_Lp.y, l.p[2] = s_Lp.z;
     Bones::Override(p_Body.m_Anim, std::move(s_Local));
 }
@@ -682,6 +699,54 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     if (s_Names.empty()) {
         Logger::Warn("[Delirium] {}: no bone names found, no body.", p_Name);
         return false;
+    }
+
+    // Which way Glacier's bone turns go (once): the one that stands the skeleton up like a person wins.
+    if (!g_ConjKnown) {
+        const auto s_Find = [&](const char* p_Bone) {
+            for (int i = 0; i < n; ++i)
+                if (_stricmp(s_Names[i].c_str(), p_Bone) == 0)
+                    return i;
+
+            return -1;
+        };
+        const int s_Lf = s_Find("l_foot"), s_Rf = s_Find("r_foot"), s_Hd = s_Find("head"), s_Lh = s_Find("l_hand"),
+                  s_Rh = s_Find("r_hand");
+
+        if (s_Lf >= 0 && s_Rf >= 0 && s_Hd >= 0 && s_Lh >= 0 && s_Rh >= 0) {
+            b.m_Layout = -1;
+            Q s_Rq;
+            SVector3 s_Rp;
+            Root(b, &s_Rq.x, s_Rp);
+            std::string s_Bind;
+            const std::vector<Bones::SQV> s_BindPose = Bones::BindPose(s_Rig, n, s_Bind);
+            float s_Score[2];
+            std::vector<float> w;
+
+            for (int c = 0; c < 2; ++c) {
+                Fk(s_Local, b.m_Parents, s_Rq, s_Rp, c == 1, w);
+                const float s_Floor = s_Rp.z;
+                s_Score[c] = std::abs(w[s_Lf * 7 + 2] - s_Floor) + std::abs(w[s_Rf * 7 + 2] - s_Floor) +
+                    std::abs(w[s_Hd * 7 + 2] - s_Floor - 1.65f);
+                Logger::Info("[Delirium] Bone turns {}: feet z {:.2f} {:.2f}, head z {:.2f}, hands z {:.2f} {:.2f} (floor {:.2f}).",
+                    c ? "inverted" : "as stored", w[s_Lf * 7 + 2], w[s_Rf * 7 + 2], w[s_Hd * 7 + 2], w[s_Lh * 7 + 2],
+                    w[s_Rh * 7 + 2], s_Floor);
+
+                if (s_BindPose.size() == static_cast<size_t>(n)) {
+                    Fk(s_BindPose, b.m_Parents, Q {0.f, 0.f, 0.f, 1.f}, SVector3(0.f, 0.f, 0.f), c == 1, w);
+                    s_Score[c] += std::abs(w[s_Lh * 7 + 2] - w[s_Rh * 7 + 2]) + std::abs(w[s_Lf * 7 + 2] - w[s_Rf * 7 + 2]);
+                    Logger::Info("[Delirium]   bind pose: hands {:.2f} {:.2f} {:.2f} / {:.2f} {:.2f} {:.2f}, feet z {:.2f} {:.2f}, head z {:.2f}.",
+                        w[s_Lh * 7], w[s_Lh * 7 + 1], w[s_Lh * 7 + 2], w[s_Rh * 7], w[s_Rh * 7 + 1], w[s_Rh * 7 + 2],
+                        w[s_Lf * 7 + 2], w[s_Rf * 7 + 2], w[s_Hd * 7 + 2]);
+                }
+            }
+
+            g_Conj = s_Score[1] < s_Score[0];
+            g_ConjKnown = true;
+            b.m_Layout = 0;
+            Logger::Info("[Delirium] Bone turns: {} (scores {:.2f} as stored, {:.2f} inverted).",
+                g_Conj ? "INVERTED" : "as stored", s_Score[0], s_Score[1]);
+        }
     }
 
     // The rig: the hips and everything under them, parents first (Hitman's own order).
@@ -1103,6 +1168,32 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             b.m_Dead = true;
             SetRagdoll(b, true);
             nm_agent_set_dead(b.m_Agent, 1);
+        }
+    }
+
+    // 47 walking or running into a body knocks it over (GTA IV's bump), pushed the way he goes.
+    if (const Body* h = Hitman(); h && h->m_Now.size() >= 3 && p_Dt > 0.f) {
+        const SVector3 s_Hips = V(h->m_Now.data());
+        SVector3 s_Vel = m_HadHitmanHips ? (s_Hips - m_HitmanHips) * (1.f / p_Dt) : SVector3(0.f, 0.f, 0.f);
+        s_Vel.z = 0.f;
+        m_HitmanHips = s_Hips;
+        m_HadHitmanHips = true;
+
+        for (Body& b : m_Bodies) {
+            if (!b.m_Npc || b.m_Ragdoll || b.m_Now.size() < 3)
+                continue;
+
+            SVector3 s_D = V(b.m_Now.data()) - s_Hips;
+            s_D.z = 0.f;
+
+            if (s_D.Length() < 0.6f && s_Vel.Length() > 1.f && s_Vel.Dot(s_D) > 0.f) {
+                SetRagdoll(b, true);
+                const SVector3 s_Push = s_Vel.Normalized() * (60.f * std::min(s_Vel.Length(), 6.f));
+                const float s_F[3] = {s_Push.x, s_Push.y, 0.f};
+                const float s_At[3] = {b.m_Now[0], b.m_Now[1], b.m_Now[2] + 0.3f};
+                nm_agent_apply_push(b.m_Agent, s_At, s_F);
+                Logger::Info("[Delirium] 47 bumped {} at {:.1f} m/s.", b.m_Name, s_Vel.Length());
+            }
         }
     }
 

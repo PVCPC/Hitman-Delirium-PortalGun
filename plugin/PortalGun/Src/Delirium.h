@@ -81,6 +81,8 @@ private:
     void UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet);
     void SetHitmanRagdoll(bool p_On);
     void SetRagdoll(Body& p_Body, bool p_On);
+    SVector3 m_HitmanHips;
+    bool m_HadHitmanHips = false;
     Body* Hitman();
     // Target `t` (0 47's body, then the peds, then the NPCs' bodies): its agent, name and health; null for none.
     NmAgent* Target(int t, std::string*& p_Name, float*& p_Health, Body*& p_Body);
