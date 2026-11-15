@@ -34,7 +34,7 @@ namespace {
     constexpr int c_Chest = 10;
     constexpr int c_MaxNpcs = 6;
     constexpr int c_MaxMeshes = 32;
-    constexpr float c_GetUp = 0.7f; // s from lying to the animation
+    constexpr float c_GetUp = 1.2f; // s from lying to the animation
 
     SVector3 V(const float* p) { return SVector3(p[0], p[1], p[2]); }
 
@@ -105,6 +105,7 @@ namespace {
     // The characters Delirium drives: the game's own ragdoll (death, knockouts) is kept off them, NM's pose is shown.
     std::mutex g_OwnedMutex;
     std::unordered_set<void*> g_Owned;
+    std::unordered_set<void*> g_OwnedNpcs;
     void (*g_Ragdoll)(ZHM5BaseCharacter*, bool) = nullptr;
     void (*g_Powered)(ZHM5BaseCharacter*, float, bool, bool, float, bool) = nullptr;
     void* g_RagdollAt = nullptr;
@@ -115,22 +116,42 @@ namespace {
         return g_Owned.contains(p_Char);
     }
 
-    void Own(void* p_Char, bool p_On) {
+    void Own(void* p_Char, bool p_On, bool p_Npc) {
         std::scoped_lock s_Lock(g_OwnedMutex);
 
         if (p_On)
             g_Owned.insert(p_Char);
         else
             g_Owned.erase(p_Char);
+
+        if (p_On && p_Npc)
+            g_OwnedNpcs.insert(p_Char);
+        else
+            g_OwnedNpcs.erase(p_Char);
     }
 
+    // ponytail: a killed NPC gets the game's death ragdoll (skipping it crashed on the shot, null +8 in HITMAN3);
+    // the dead body's look is then the game's, not NM's.
+
     void HkRagdoll(ZHM5BaseCharacter* c, bool p_InMotion) {
-        if (!Owned(c))
+        bool s_Dead = false;
+        {
+            std::scoped_lock s_Lock(g_OwnedMutex);
+            s_Dead = g_OwnedNpcs.contains(c) && static_cast<ZActor*>(c)->IsDead();
+        }
+
+        if (!Owned(c) || s_Dead)
             g_Ragdoll(c, p_InMotion);
     }
 
     void HkPowered(ZHM5BaseCharacter* c, float t, bool p_InMotion, bool p_Upper, float a5, bool a6) {
-        if (!Owned(c))
+        bool s_Dead = false;
+        {
+            std::scoped_lock s_Lock(g_OwnedMutex);
+            s_Dead = g_OwnedNpcs.contains(c) && static_cast<ZActor*>(c)->IsDead();
+        }
+
+        if (!Owned(c) || s_Dead)
             g_Powered(c, t, p_InMotion, p_Upper, a5, a6);
     }
 
@@ -866,8 +887,27 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     const int s_N = static_cast<int>(b.m_Bones.size());
     std::vector<float> s_Places(s_N * 3);
 
+    std::vector<float> s_Rest = b.m_Now;
+    {
+        std::string w;
+        const std::vector<Bones::SQV> s_BindL = Bones::BindPose(s_Rig, n, w);
+
+        if (s_BindL.size() == static_cast<size_t>(n)) {
+            Q s_Rq;
+            SVector3 s_Rp;
+            Root(b, &s_Rq.x, s_Rp);
+            std::vector<float> s_W;
+            Fk(s_BindL, b.m_Parents, s_Rq, s_Rp, g_Conj, s_W);
+
+            for (int r = 0; r < s_N; ++r)
+                std::copy_n(&s_W[b.m_Bones[r] * 7], 7, &s_Rest[r * 7]);
+
+            Logger::Info("[Delirium] {}: fitted on the bind pose.", p_Name);
+        }
+    }
+
     for (int r = 0; r < s_N; ++r)
-        std::copy_n(&b.m_Now[r * 7], 3, &s_Places[r * 3]);
+        std::copy_n(&s_Rest[r * 7], 3, &s_Places[r * 3]);
 
     char s_Report[2048] = {};
 
@@ -918,7 +958,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     const float s_At[3] = {s_Hips.x, s_Hips.y, s_Floor};
     b.m_Agent = nm_agent_create(b.m_Build, s_At, 0.f, 0.37f);
 
-    b.m_Rig = b.m_Agent ? nm_rig_create(b.m_Agent, s_N, s_RigParents.data(), b.m_Now.data(), s_Map.data()) : nullptr;
+    b.m_Rig = b.m_Agent ? nm_rig_create(b.m_Agent, s_N, s_RigParents.data(), s_Rest.data(), s_Map.data()) : nullptr;
 
     if (!b.m_Rig) {
         Logger::Warn("[Delirium] {}: {}", p_Name, LastError());
@@ -939,7 +979,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
 
     Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Base == m_Wilma ? "Wilma" : "Homer", n,
         s_N);
-    Own(b.m_Char, true);
+    Own(b.m_Char, true, b.m_Npc);
     m_Bodies.push_back(std::move(b));
     return true;
 }
@@ -951,7 +991,7 @@ void Delirium::Unhook() {
 }
 
 void Delirium::Detach(Body& p_Body) {
-    Own(p_Body.m_Char, false);
+    Own(p_Body.m_Char, false, false);
     Bones::Override(p_Body.m_Anim, {});
 
     if (p_Body.m_Rig)
@@ -1243,7 +1283,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             SVector3 s_D = V(b.m_Now.data()) - s_Hips;
             s_D.z = 0.f;
 
-            if (s_D.Length() < 0.6f && s_Vel.Length() > 1.f && s_Vel.Dot(s_D) > 0.f) {
+            if (s_D.Length() < 0.95f && s_Vel.Length() > 0.6f && s_Vel.Dot(s_D) > 0.f) {
                 SetRagdoll(b, true);
                 const SVector3 s_Push = s_Vel.Normalized() * 100.f;
                 const float s_F[3] = {s_Push.x, s_Push.y, 0.f};

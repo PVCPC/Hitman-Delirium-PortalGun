@@ -2228,16 +2228,16 @@ void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
         if (!s_On)
             continue;
 
-        // The texture's tablet inside 47's chest: in view (so the camera renders, it was black at z -999), hidden by him.
-        // ponytail: if the tablet pokes out of him, scale it down or find the render destination's own always-render flag.
-        if (s_View.m_Tablet)
-            if (const auto s_Me = p_Hitman.QueryInterface<ZSpatialEntity>()) {
-                SMatrix s_M = s_Me->GetObjectToWorldMatrix();
-                s_M.Trans = s_M.Trans + s_M.ZAxis * 1.3f;
-                s_View.m_Tablet->SetObjectToWorldMatrixFromEditor(s_M);
-            }
-
         const Portal& s_In = i == 0 ? m_Blue : m_Orange;
+
+        // The texture's tablet just inside the wall behind its portal: in view whenever the portal is (Glacier only
+        // renders a texture something on screen shows; at z -999 it was black), hidden by the wall, out of 47's way.
+        if (s_View.m_Tablet) {
+            SMatrix s_M = s_In.m_Transform;
+            s_M.Trans = s_M.Trans - s_M.YAxis * 0.25f;
+            s_View.m_Tablet->SetObjectToWorldMatrixFromEditor(s_M);
+        }
+
         const Portal& s_Out = i == 0 ? m_Orange : m_Blue;
         const SMatrix s_Cam = s_Camera->GetObjectToWorldMatrix();
         const SVector3 s_Eye = ToVec3(s_Cam.Trans);
