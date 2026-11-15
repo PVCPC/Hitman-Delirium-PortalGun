@@ -92,6 +92,12 @@ private:
         std::vector<float> m_World;    // every bone's world frame this frame (7 floats each)
         bool m_Dead = false;
         bool m_Shot = false; // the game ragdolled it (shot): NM takes the hit
+        // Killed: the game's death ragdoll kept, its bodies made kinematic and moved onto NM's bones each frame.
+        bool m_Follow = false, m_FollowGone = false;
+        void* m_FollowSet = nullptr;     // the ragdoll's body set followed (re-read every frame)
+        std::vector<int> m_FollowRig;    // each ragdoll body's rig bone (-1: left to the game)
+        std::vector<float> m_FollowOff;  // each body's frame under that bone (7 floats)
+        std::vector<float> m_RigWorld;   // NM's rig bones' world frames this frame (7 floats each)
         int m_Hit = 0;          // bullets NM has taken
         int m_Layout = -1;
         bool m_Npc = false;
@@ -149,6 +155,7 @@ private:
     ZEntityRef m_Cripple;
     void UpdateCripple();
     void ShootAtAim(Body& b);
+    void Follow(Body& b);
 public:
     // 47 fired a gun (eWeaponType) / something hit a character: from the game's hooks, any thread.
     void Fired(int p_Type) { m_Weapon = p_Type; }

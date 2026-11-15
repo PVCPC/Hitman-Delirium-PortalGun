@@ -7,6 +7,7 @@
 #include <Glacier/ZSpatialEntity.h>
 #include <Glacier/ZResource.h>
 #include <Glacier/ZEntity.h>
+#include <Glacier/ZPhysics.h>
 #include <Glacier/ZModule.h>
 #include <Glacier/SExternalReferences.h>
 #include <Glacier/EntityFactory.h>
@@ -840,6 +841,199 @@ void Delirium::WritePose(Body& p_Body) {
     l.p[0] = s_Lp.x, l.p[1] = s_Lp.y, l.p[2] = s_Lp.z;
     p_Body.m_Written = s_Local;
     Bones::Override(p_Body.m_Anim, std::move(s_Local));
+
+    // The rig bones' world frames (Hamilton): the hips' as NM gave it, each other one under its parent.
+    p_Body.m_RigWorld.assign(n * 7, 0.f);
+
+    for (size_t r = 0; r < n; ++r) {
+        float* o = &p_Body.m_RigWorld[r * 7];
+
+        if (static_cast<int>(r) == s_Hips) {
+            std::copy_n(&s_Out[n * 4], 3, o);
+            std::copy_n(h, 4, o + 3);
+            continue;
+        }
+
+        const int s_Pb = p_Body.m_Parents[p_Body.m_Bones[r]];
+        const auto it = std::find(p_Body.m_Bones.begin(), p_Body.m_Bones.begin() + r, s_Pb);
+
+        if (it == p_Body.m_Bones.begin() + r)
+            continue;
+
+        const float* w = &p_Body.m_RigWorld[(it - p_Body.m_Bones.begin()) * 7];
+        const Q s_Wq {w[3], w[4], w[5], w[6]};
+        const Q q = Norm(Mul(s_Wq, Q {s_Out[r * 4], s_Out[r * 4 + 1], s_Out[r * 4 + 2], s_Out[r * 4 + 3]}));
+        const SVector3 p = V(w) + Rot(s_Wq, V(p_Body.m_Local[p_Body.m_Bones[r]].p));
+        o[0] = p.x, o[1] = p.y, o[2] = p.z, o[3] = q.x, o[4] = q.y, o[5] = q.z, o[6] = q.w;
+    }
+}
+
+namespace {
+    // A character's death ragdoll (HITMAN3, from ZHM5BaseCharacter::ActivateRagdoll and its handler's activate):
+    // character +0x68 the ragdoll handler, +0xa8 its ragdoll (+0x30 on), +0x68 the body set: +0x08 the bodies
+    // (ZPhysicsObject*), +0x40 their bones (an int at the front of 0x50 each); both small vectors (bit 62 of the third
+    // word: stored inline, its low byte the count).
+    constexpr int c_MaxRagdollBodies = 64;
+
+    uint8_t* At(const void* p, size_t o) { return *reinterpret_cast<uint8_t* const*>(static_cast<const uint8_t*>(p) + o); }
+
+    uint8_t* Small(uint8_t* p_Set, size_t o, size_t p_Stride, int& n) {
+        const uint64_t f = *reinterpret_cast<uint64_t*>(p_Set + o + 0x10);
+
+        if ((f >> 62) & 1) {
+            n = static_cast<int>(f & 0xff);
+            return p_Set + o;
+        }
+
+        uint8_t* b = At(p_Set, o);
+        n = static_cast<int>((At(p_Set, o + 8) - b) / static_cast<ptrdiff_t>(p_Stride));
+        return b;
+    }
+
+    int ReadRagdoll(void* p_Char, void** p_Set, void** p_Bodies, int* p_Bones) {
+        __try {
+            uint8_t* s_Handler = At(p_Char, 0x68);
+            uint8_t* s_Ragdoll = s_Handler ? At(s_Handler, 0xa8) : nullptr;
+
+            if (!s_Ragdoll || !s_Ragdoll[0x30])
+                return 0;
+
+            uint8_t* s_Set = At(s_Ragdoll, 0x68);
+
+            if (!s_Set)
+                return 0;
+
+            int n = 0, m = 0;
+            void** s_B = reinterpret_cast<void**>(Small(s_Set, 0x08, 8, n));
+            uint8_t* s_Bn = Small(s_Set, 0x40, 0x50, m);
+            n = n < m ? n : m;
+            n = n < c_MaxRagdollBodies ? n : c_MaxRagdollBodies;
+
+            for (int i = 0; i < n; ++i) {
+                p_Bodies[i] = s_B[i];
+                p_Bones[i] = *reinterpret_cast<int32_t*>(s_Bn + i * 0x50);
+
+                if (!p_Bodies[i] || !*static_cast<void**>(p_Bodies[i]))
+                    return -1;
+            }
+
+            *p_Set = s_Set;
+            return n;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return -1;
+        }
+    }
+
+    // An object's class (its RTTI name), for the log and the check.
+    const char* ClassOf(void* p_Object) {
+        __try {
+            const auto* s_Col = (*static_cast<uint32_t***>(p_Object))[-1];
+            const auto s_Base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+            return reinterpret_cast<const char*>(s_Base + s_Col[3] + 16);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return "?";
+        }
+    }
+
+    // ZPhysicsObject's vtable: 65 IsKinematic, 66 SetKinematic(bool, bool) (HITMAN3).
+    bool IsKinematic(void* p) { return (*reinterpret_cast<bool(***)(void*)>(p))[65](p); }
+    void SetKinematic(void* p, bool p_On) { (*reinterpret_cast<void(***)(void*, bool, bool)>(p))[66](p, p_On, true); }
+
+    SMatrix ToMatrix(const Q& q, const SVector3& p) {
+        SMatrix m;
+        const SVector3 x = Rot(q, SVector3(1.f, 0.f, 0.f)), y = Rot(q, SVector3(0.f, 1.f, 0.f)), z = Rot(q, SVector3(0.f, 0.f, 1.f));
+        m.XAxis = float4(x.x, x.y, x.z, 0.f);
+        m.YAxis = float4(y.x, y.y, y.z, 0.f);
+        m.ZAxis = float4(z.x, z.y, z.z, 0.f);
+        m.Trans = float4(p.x, p.y, p.z, 1.f);
+        return m;
+    }
+}
+
+// The game's death ragdoll onto NM's body: each of its bodies kinematic, moved where its bone is on NM's pose (its
+// offset from the bone taken when it was first seen).
+// ponytail: the ragdoll's layout is HITMAN3's (offsets above); a body that isn't a ZPhysicsObject stops it.
+void Delirium::Follow(Body& b) {
+    void* s_Bodies[c_MaxRagdollBodies];
+    int s_Bones[c_MaxRagdollBodies];
+    void* s_Set = nullptr;
+    const int n = ReadRagdoll(b.m_Char, &s_Set, s_Bodies, s_Bones);
+    const size_t s_Rig = b.m_Bones.size();
+
+    if (n <= 0 || b.m_RigWorld.size() != s_Rig * 7) {
+        if (b.m_FollowSet || n < 0) {
+            Logger::Info("[Delirium] {}: its ragdoll is gone ({}); Delirium lets it go.", b.m_Name, n < 0 ? "unreadable" : "off");
+            b.m_FollowGone = true;
+        }
+
+        return;
+    }
+
+    if (s_Set != b.m_FollowSet || b.m_FollowRig.size() != static_cast<size_t>(n)) {
+        b.m_FollowSet = s_Set;
+        b.m_FollowRig.assign(n, -1);
+        b.m_FollowOff.assign(n * 7, 0.f);
+        std::string s_Log;
+
+        for (int i = 0; i < n; ++i) {
+            const std::string s_Class = ClassOf(s_Bodies[i]);
+
+            if (s_Class.find("PhysicsObject") == std::string::npos) {
+                Logger::Warn("[Delirium] {}: ragdoll body {} is a {}; Delirium lets it go.", b.m_Name, i, s_Class);
+                b.m_FollowGone = true;
+                return;
+            }
+
+            const auto it = std::find(b.m_Bones.begin(), b.m_Bones.end(), s_Bones[i]);
+
+            if (it == b.m_Bones.end()) {
+                s_Log += std::format("{}:bone {} (no rig) ", i, s_Bones[i]);
+                continue;
+            }
+
+            const int r = static_cast<int>(it - b.m_Bones.begin());
+            const SMatrix s_M = static_cast<IPhysicsObject*>(s_Bodies[i])->GetTransform();
+            const Q s_Bq = FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis);
+            const float* w = &b.m_RigWorld[r * 7];
+            const Q s_Wq {w[3], w[4], w[5], w[6]};
+            const Q s_Oq = Norm(Mul(Conj(s_Wq), s_Bq));
+            const SVector3 s_Op = Rot(Conj(s_Wq), SVector3(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z) - V(w));
+            float* o = &b.m_FollowOff[i * 7];
+            o[0] = s_Op.x, o[1] = s_Op.y, o[2] = s_Op.z, o[3] = s_Oq.x, o[4] = s_Oq.y, o[5] = s_Oq.z, o[6] = s_Oq.w;
+            b.m_FollowRig[i] = r;
+            SetKinematic(s_Bodies[i], true);
+            s_Log += std::format("{}:bone {} {:.2f}m ", i, s_Bones[i], s_Op.Length());
+        }
+
+        Logger::Info("[Delirium] {}: following its ragdoll's {} bodies ({}): {}", b.m_Name, n, ClassOf(s_Bodies[0]), s_Log);
+    }
+
+    int s_Lost = 0;
+
+    for (int i = 0; i < n; ++i) {
+        const int r = b.m_FollowRig[i];
+
+        if (r < 0)
+            continue;
+
+        if (!IsKinematic(s_Bodies[i]))
+            SetKinematic(s_Bodies[i], true), ++s_Lost;
+
+        const float* w = &b.m_RigWorld[r * 7];
+        const float* o = &b.m_FollowOff[i * 7];
+        const Q s_Wq {w[3], w[4], w[5], w[6]};
+        const Q q = Norm(Mul(s_Wq, Q {o[3], o[4], o[5], o[6]}));
+        static_cast<IPhysicsObject*>(s_Bodies[i])->MoveTransform(ToMatrix(q, V(w) + Rot(s_Wq, V(o))));
+    }
+
+    static int s_LostLogs = 0;
+
+    if (s_Lost && s_LostLogs < 5) {
+        ++s_LostLogs;
+        Logger::Info("[Delirium] {}: the game took {} of its ragdoll's bodies off kinematic; put back.", b.m_Name, s_Lost);
+    }
 }
 
 bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool p_Npc, bool p_Female,
@@ -1438,13 +1632,28 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     m_Aim = p_Aim;
     Bones::Tick();
 
-    // ponytail: a kill is the game's ragdoll (it takes the mesh; blocking it crashed). Delirium's death needs the
-    // game's ragdoll driven from NM (FOLLOW mode on Glacier's rigid bodies).
+    // A kill: the game's death ragdoll runs (blocking it crashed), its bodies then follow NM's (Follow).
+    for (Body& b : m_Bodies)
+        if (b.m_Npc && !b.m_Follow && GameTook(b.m_Char)) {
+            Logger::Info("[Delirium] {}: the game ragdolled it (killed); its ragdoll follows Delirium's body.", b.m_Name);
+            b.m_Follow = true;
+
+            if (!b.m_Dead) {
+                b.m_Dead = true;
+                SetRagdoll(b, true);
+
+                if (b.m_Hit == 0)
+                    ShootAtAim(b);
+
+                if (b.m_Health >= 50.f)
+                    nm_agent_set_dead(b.m_Agent, 1);
+            }
+        }
+
     std::erase_if(m_Bodies, [&](Body& b) {
-        if (!b.m_Npc || !GameTook(b.m_Char))
+        if (!b.m_FollowGone)
             return false;
 
-        Logger::Info("[Delirium] {}: the game ragdolled it (killed); Delirium lets it go.", b.m_Name);
         Detach(b);
         return true;
     });
@@ -1772,15 +1981,22 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     for (Body& b : m_Bodies) {
         // Ragdolling: the character goes where its body goes (no walking off out of it), then the pose onto it.
         if (b.m_Ragdoll) {
-            float s_Pos[3], s_Rot[4];
-            nm_agent_get_part_transform(b.m_Agent, 0, s_Pos, s_Rot);
-            SMatrix s_M = b.m_HeldRot;
-            s_M.Trans.x = s_Pos[0];
-            s_M.Trans.y = s_Pos[1];
-            s_M.Trans.z = b.m_HeldZ + (b.m_Npc ? c_CapsuleLift : 0.f);
-            b.m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
+            // Followed: the entity is the game's ragdoll's.
+            if (!b.m_Follow) {
+                float s_Pos[3], s_Rot[4];
+                nm_agent_get_part_transform(b.m_Agent, 0, s_Pos, s_Rot);
+                SMatrix s_M = b.m_HeldRot;
+                s_M.Trans.x = s_Pos[0];
+                s_M.Trans.y = s_Pos[1];
+                s_M.Trans.z = b.m_HeldZ + (b.m_Npc ? c_CapsuleLift : 0.f);
+                b.m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
+            }
+
             Posed(b);
             WritePose(b);
+
+            if (b.m_Follow)
+                Follow(b);
         }
 
         if (b.m_Ragdoll && (b.m_SpeedCheck -= p_Dt) <= 0.f) {
