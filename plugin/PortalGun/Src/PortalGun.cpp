@@ -151,10 +151,24 @@ namespace {
         return ToVec3(p_Portal.Inverse().WVectorTransform(float4(p_World, 1.f)));
     }
 
+    bool g_Square = false; // rectangle portals instead of ovals (the Portals tab)
+
     bool InsideOval(const SVector3& p_Local, float p_Margin = 0.f) {
         const float s_Ex = p_Local.x / (c_HalfWidth + p_Margin);
         const float s_Ez = p_Local.z / (c_HalfHeight + p_Margin);
+
+        if (g_Square)
+            return std::abs(s_Ex) <= 1.f && std::abs(s_Ez) <= 1.f;
+
         return s_Ex * s_Ex + s_Ez * s_Ez <= 1.f;
+    }
+
+    // The opening's half width at height z (its own axes).
+    float HalfWidthAt(float p_Z) {
+        if (g_Square)
+            return std::abs(p_Z) <= c_HalfHeight ? c_HalfWidth : 0.f;
+
+        return c_HalfWidth * std::sqrt(std::max(0.f, 1.f - (p_Z / c_HalfHeight) * (p_Z / c_HalfHeight)));
     }
 
     // Rotation about world Z that faces along p_Aim, flattened (X = right, Y = forward, Z = up).
@@ -536,6 +550,7 @@ void PortalGun::DrawPortalTab() {
     if (ImGui::Button(ICON_MD_CLEAR " CLEAR"))
         m_RequestClear = true;
 
+    ImGui::Checkbox("Rectangle portals", &g_Square);
     ImGui::Checkbox("See-through portals", &m_SeeThrough);
     ImGui::SameLine();
     ImGui::Checkbox("Show portal cameras", &m_ShowCameras);
@@ -1321,6 +1336,17 @@ void PortalGun::DrawPortal(IRenderer* p_Renderer, const Portal& p_Portal, const 
     for (int s_Ring = 0; s_Ring < 4; ++s_Ring) {
         const float s_Scale = 1.f - 0.025f * s_Ring;
         const float s_Offset = 0.01f * s_Ring;
+
+        if (g_Square) {
+            const float w = c_HalfWidth * s_Scale, h = c_HalfHeight * s_Scale;
+            const float s_C[5][2] = {{-w, -h}, {w, -h}, {w, h}, {-w, h}, {-w, -h}};
+
+            for (int k = 0; k < 4; ++k)
+                p_Renderer->DrawLine3D(ToVec3(s_M.WVectorTransform(float4(s_C[k][0], s_Offset, s_C[k][1], 1.f))),
+                    ToVec3(s_M.WVectorTransform(float4(s_C[k + 1][0], s_Offset, s_C[k + 1][1], 1.f))), p_Color, p_Color);
+
+            continue;
+        }
 
         for (int i = 0; i < c_Segments; ++i) {
             const float s_A0 = 2.f * std::numbers::pi_v<float> * i / c_Segments;
@@ -2355,8 +2381,8 @@ void PortalGun::DrawViews() {
         for (int k = 0; k < c_Strips; ++k) {
             const float s_Z0 = c_HalfHeight * (-1.f + 2.f * k / c_Strips);
             const float s_Z1 = c_HalfHeight * (-1.f + 2.f * (k + 1) / c_Strips);
-            const float s_W0 = c_HalfWidth * std::sqrt(std::max(0.f, 1.f - (s_Z0 / c_HalfHeight) * (s_Z0 / c_HalfHeight)));
-            const float s_W1 = c_HalfWidth * std::sqrt(std::max(0.f, 1.f - (s_Z1 / c_HalfHeight) * (s_Z1 / c_HalfHeight)));
+            const float s_W0 = HalfWidthAt(s_Z0);
+            const float s_W1 = HalfWidthAt(s_Z1);
             ImVec2 s_P[4];
 
             if (!s_Screen(-s_W0, s_Z0, s_P[0]) || !s_Screen(s_W0, s_Z0, s_P[1]) ||

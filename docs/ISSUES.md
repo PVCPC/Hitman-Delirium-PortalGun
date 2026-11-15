@@ -17,7 +17,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 8 | NPCs fly into the sky when touched or ragdolled | built: standing NPCs no longer collide with other bodies (nm_agent_collide_agents) |
 | 9 | 47 snags on peds, standing or downed | built: bump from 0.95 m; a downed ped's game capsule is lifted over his head while it lies |
 | 10 | Female NPCs use Wilma | built |
-| 11 | Holding objects or guns while ragdolled | open: plan is to drop the item when he goes down |
+| 11 | Holding objects or guns while ragdolled | open: the SDK has no drop call; needs reversing the game's drop |
 | 22 | Ragdolls have no behaviours (fall over limp, no balance / catch fall / high fall) | built: balance on every knock-down (unlimited steps, Playroom default), high fall past 6 m/s, shots keep their own reactions |
 | 23 | Pushed peds fall through the map / walls (still through a shed) | map: confirmed. Walls: 30 cm thick slabs (thin ones were skipped through in one step); wall rays had also been ignoring walls near the pushed ped itself |
 | 24 | 47's arms match less while running / walking with the gun | open: the gun's aim layer likely moves the arms after the pose we read |
@@ -36,7 +36,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 26 | Game hitches when shooting or entering portals | built: placement casts about half the rays; the ragdoll dive (entering) is gone |
 | 27 | 47's Homer drops into the ground after shooting a portal | built (likely the sinking ground, #23) |
 | 28 | Portal 2 lets you clip the portal edges when walking in | built: trigger reaches 25 cm past the rim |
-| 29 | Square / rectangle portals; still the old October rings | open |
+| 29 | Square / rectangle portals; still the old October rings | built: "Rectangle portals" in the Portals tab (rim, walking through and see-through follow it). Delirium bodies still cross by the oval test. Playroom look: in progress |
 | 30 | Shooting a portal froze 47 in place | built: the camera tablet sat in his chest and caught him; moved behind the portal |
 | 31 | Shooting a ped crashes the game (still, after the first fix) | built: the game's ragdoll is never blocked on NPCs now (its death code walked an empty list, HITMAN3+0x10c3bc4); a ped the game ragdolls is let go by Delirium |
 | 32 | Everyone's upper Homer twitches rapidly and violently; nobody's arms line up; peds twist around their Homer | built: UpdateBones runs several passes a frame (base, upper body / aim); we read whichever ran last, which flipped frame to frame. Now always the same (last) pass; the log names each pass's bones |
