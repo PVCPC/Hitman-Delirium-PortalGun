@@ -682,6 +682,14 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
     m_PrevFeet = ToVec3(s_Trans.Trans);
     m_HasPrevFeet = true;
 
+    if (m_Blue.m_Placed && m_Orange.m_Placed) {
+        const DpFrame s_Pair[2] = {ToDpFrame(m_Blue.m_Transform), ToDpFrame(m_Orange.m_Transform)};
+        m_Delirium.SetPortals(s_Pair);
+    }
+    else {
+        m_Delirium.SetPortals(nullptr);
+    }
+
     if (m_Blue.m_Placed && m_Orange.m_Placed && !TryTeleport(m_Blue, m_Orange, s_HitmanSpatial, s_Trans))
         TryTeleport(m_Orange, m_Blue, s_HitmanSpatial, s_Trans);
 
@@ -1146,6 +1154,12 @@ bool PortalGun::TryTeleport(Portal& p_In, Portal& p_Out, ZSpatialEntity* p_Hitma
 
     // Portal keeps the player's speed and turns his velocity with the portal pair.
     const SVector3 s_InVel = m_Flying ? m_FlyVel : m_WalkVel;
+
+    // With his Delirium body: he goes in as a ragdoll and the body itself goes through (the Playroom's way).
+    if (m_Delirium.Dive(s_InVel + ToVec3(s_InTrans.YAxis) * -1.5f)) {
+        m_Cooldown = c_TeleportCooldown;
+        return true;
+    }
     SVector3 s_OutVel = MapDirection(s_InVel, s_InTrans, p_Out.m_Transform);
 
     SMatrix s_NewTrans = ExitTransform(p_PlayerTrans, s_InTrans, p_Out.m_Transform);

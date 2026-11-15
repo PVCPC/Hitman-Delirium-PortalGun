@@ -2,6 +2,8 @@
 // gta4nm.dll is loaded from mods/Delirium on first use (delay-loaded), with the NM data the user's GTA IV gave.
 #pragma once
 
+#include <delirium_portal.h>
+
 #include <Glacier/ZMath.h>
 
 #include "Bones.h"
@@ -35,6 +37,12 @@ public:
     void Draw3D(IRenderer* p_Renderer);
     void DrawMenu();
     void Clear();
+    // The linked pair (null: not both open), for ragdolls going through and the holes in the ground.
+    void SetPortals(const DpFrame* p_Frames);
+
+    // 47 into a portal: he goes in as a ragdoll at this speed (false: he has no body, teleport him).
+    bool Dive(const SVector3& p_Vel);
+
     static void Unhook(); // unloading: the game's ragdoll back as it was
 
     // The hotkeys' states (shown in the menu): Delirium on NPCs, and 47 ragdolling.
@@ -59,6 +67,8 @@ private:
         NmAgent* m_Agent = nullptr;
         NmRig* m_Rig = nullptr;
         NmBuild* m_Build = nullptr; // fitted to it, freed with it
+        float m_PortalLast[2] = {};
+        bool m_PortalHad = false;
         std::vector<int> m_Bones;      // Hitman bone of each rig bone (the pelvis and everything under it)
         std::vector<int32_t> m_Parents; // Hitman's parents, every bone
         std::vector<float> m_Now;      // the rig bones' world frames this frame (7 floats each)
@@ -82,6 +92,8 @@ private:
     void UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet);
     void SetHitmanRagdoll(bool p_On);
     void SetRagdoll(Body& p_Body, bool p_On);
+    DpFrame m_Portals[2] {};
+    bool m_PortalsOpen = false;
     SVector3 m_HitmanHips;
     bool m_HadHitmanHips = false;
     Body* Hitman();

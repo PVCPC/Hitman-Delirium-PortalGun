@@ -10,6 +10,7 @@
 #include <MinHook.h>
 
 #include "PortalLog.h"
+#include <delirium_portal.h>
 #define Logger PortalLog
 
 #include "IRenderer.h"
@@ -372,12 +373,41 @@ void Delirium::UpdateGround(const Ray& p_Ray) {
             }
         }
 
+        // A cell over an open portal in the floor is a hole: bodies fall in.
+        const auto s_OverPortal = [&](uint32_t a, uint32_t d) {
+            if (!m_PortalsOpen)
+                return false;
+
+            const float s_C[3] = {(s_Verts[a * 3] + s_Verts[d * 3]) * 0.5f, (s_Verts[a * 3 + 1] + s_Verts[d * 3 + 1]) * 0.5f,
+                (s_Verts[a * 3 + 2] + s_Verts[d * 3 + 2]) * 0.5f};
+
+            for (const DpFrame& f : m_Portals) {
+                const float s_Z = dp_local_z(&f, &s_C);
+                const SVector3 n = Rotate(f.rot, SVector3(0.f, 0.f, 1.f));
+
+                if (n.z > 0.7f && std::abs(s_Z) < 0.4f) {
+                    const float s_Below[3] = {s_C[0] - n.x * (s_Z + 0.05f), s_C[1] - n.y * (s_Z + 0.05f),
+                        s_C[2] - n.z * (s_Z + 0.05f)};
+
+                    if (dp_crossed(&f, 1.f, &s_Below))
+                        return true;
+                }
+            }
+
+            return false;
+        };
+
         for (int y = 0; y + 1 < c_N; ++y) {
             for (int x = 0; x + 1 < c_N; ++x) {
                 const uint32_t a = y * c_N + x, b = a + 1, c = a + c_N, d = c + 1;
-                s_Tris.insert(s_Tris.end(), {a, b, d, a, d, c});
+
+                if (!s_OverPortal(a, d))
+                    s_Tris.insert(s_Tris.end(), {a, b, d, a, d, c});
             }
         }
+
+        if (s_Tris.empty())
+            s_Tris = {0, 1, 2};
 
         nm_world_set_mesh(m_World, static_cast<int>(p), s_Verts.data(), c_N * c_N, s_Tris.data(),
             static_cast<int>(s_Tris.size() / 3), nullptr);
@@ -888,6 +918,26 @@ void Delirium::Detach(Body& p_Body) {
     p_Body.m_Build = nullptr;
 }
 
+void Delirium::SetPortals(const DpFrame* p_Frames) {
+    m_PortalsOpen = p_Frames != nullptr;
+
+    if (p_Frames)
+        m_Portals[0] = p_Frames[0], m_Portals[1] = p_Frames[1];
+}
+
+bool Delirium::Dive(const SVector3& p_Vel) {
+    Body* b = Hitman();
+
+    if (!b || b->m_Ragdoll)
+        return b != nullptr;
+
+    SetHitmanRagdoll(true);
+    const float s_V[3] = {p_Vel.x, p_Vel.y, p_Vel.z};
+    nm_agent_add_velocity(b->m_Agent, s_V);
+    Logger::Info("[Delirium] 47 into the portal as a ragdoll at {:.1f} m/s.", p_Vel.Length());
+    return true;
+}
+
 void Delirium::SetHitmanRagdoll(bool p_On) {
     m_HitmanRagdoll = p_On;
 
@@ -1169,6 +1219,72 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     while (m_Accum >= c_Step) {
         m_Accum -= c_Step;
         nm_world_step_agents(m_World, s_Agents.data(), static_cast<int>(s_Agents.size()), c_Step, 0);
+    }
+
+    // Ragdolls through the portals, the Playroom's way (portal.rs funnel_agent, transit): Portal 2's funnel steers a
+    // fall toward a floor portal, and when a body's centre crosses an opening inside it the whole body comes out of
+    // the other, turned, its speed turned with it.
+    // ponytail: no ghost copy at the far portal while part way in (the Playroom draws one; Hitman's mesh is one piece).
+    for (Body& b : m_Bodies) {
+        if (!m_PortalsOpen || !b.m_Ragdoll) {
+            b.m_PortalHad = false;
+            continue;
+        }
+
+        float s_Com[3], s_Vel[3];
+        nm_agent_get_com(b.m_Agent, s_Com, s_Vel);
+        float s_Steer[3] = {s_Vel[0], s_Vel[1], s_Vel[2]};
+        dp_funnel(m_Portals, 2, 9.81f, &s_Com, &s_Steer, p_Dt);
+        const float s_Dv[3] = {s_Steer[0] - s_Vel[0], s_Steer[1] - s_Vel[1], s_Steer[2] - s_Vel[2]};
+
+        if (s_Dv[0] * s_Dv[0] + s_Dv[1] * s_Dv[1] + s_Dv[2] * s_Dv[2] > 1e-10f)
+            nm_agent_add_velocity(b.m_Agent, s_Dv);
+
+        const int s_Parts = nm_agent_part_count(b.m_Agent);
+        float s_C[3] = {};
+
+        for (int k = 0; k < s_Parts; ++k) {
+            float s_P[3], s_Q[4];
+            nm_agent_get_part_transform(b.m_Agent, k, s_P, s_Q);
+            s_C[0] += s_P[0] / s_Parts, s_C[1] += s_P[1] / s_Parts, s_C[2] += s_P[2] / s_Parts;
+        }
+
+        const float s_Was[2] = {b.m_PortalLast[0], b.m_PortalLast[1]};
+        const bool s_Had = b.m_PortalHad;
+        b.m_PortalLast[0] = dp_local_z(&m_Portals[0], &s_C);
+        b.m_PortalLast[1] = dp_local_z(&m_Portals[1], &s_C);
+        b.m_PortalHad = true;
+
+        for (int i = 0; i < 2 && s_Had; ++i) {
+            if (!dp_crossed(&m_Portals[i], s_Was[i], &s_C))
+                continue;
+
+            const DpFrame& s_From = m_Portals[i];
+            const DpFrame& s_To = m_Portals[1 - i];
+
+            for (int k = 0; k < s_Parts; ++k) {
+                float s_P[3], s_Q[4], s_V[3], s_W[3];
+                nm_agent_get_part_transform(b.m_Agent, k, s_P, s_Q);
+                nm_agent_get_part_velocity(b.m_Agent, k, s_V, s_W);
+                dp_through(&s_From, &s_To, &s_P, &s_V, &s_Q);
+                dp_through(&s_From, &s_To, nullptr, &s_W, nullptr);
+                nm_agent_set_part_state(b.m_Agent, k, s_P, s_Q, s_V, s_W);
+            }
+
+            nm_agent_get_com(b.m_Agent, s_Com, s_Vel);
+            float s_Drop[3];
+            dp_exit_gimme(&s_To, &s_Vel, &s_Drop);
+            const float s_Back[3] = {-s_Drop[0], -s_Drop[1], -s_Drop[2]};
+
+            if (s_Drop[0] != 0.f || s_Drop[1] != 0.f || s_Drop[2] != 0.f)
+                nm_agent_add_velocity(b.m_Agent, s_Back);
+
+            b.m_PortalHad = false;
+            m_GroundTimer = 0.f;
+            Logger::Info("[Delirium] {} through the {} portal at {:.1f} m/s.", b.m_Name, i ? "orange" : "blue",
+                std::sqrt(s_Vel[0] * s_Vel[0] + s_Vel[1] * s_Vel[1] + s_Vel[2] * s_Vel[2]));
+            break;
+        }
     }
 
     // NM's pose out onto the ragdolling ones.
