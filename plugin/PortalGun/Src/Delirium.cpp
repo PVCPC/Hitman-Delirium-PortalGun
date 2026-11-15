@@ -180,8 +180,8 @@ namespace {
     // Glacier's stored bone turns may be the inverse of a standard (Hamilton, world = parent * local) quaternion: the
     // spine and standing legs look right either way, the arms and a run's legs don't. Found per game by a check at
     // the first body (feet on the floor, head at head height, the bind pose's hands level), logged.
-    bool g_Conj = false;
-    bool g_ConjKnown = false;
+    bool g_Conj = true;
+    bool g_ConjKnown = true;
 
     // World frames (7 floats each) from parent-relative bones under a root.
     void Fk(const std::vector<Bones::SQV>& p_L, const std::vector<int32_t>& p_Parents, Q p_RootQ, SVector3 p_RootP, bool p_Conj,
@@ -990,7 +990,15 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         if (i == s_HipsBone || (s_Parent >= 0 && s_InRig[s_Parent] >= 0)) {
             s_InRig[i] = static_cast<int>(b.m_Bones.size());
             s_RigParents.push_back(i == s_HipsBone ? -1 : s_InRig[s_Parent]);
-            const int s_Part = nm_rig_part_for_name(s_Names[i].c_str());
+            int s_Part = nm_rig_part_for_name(s_Names[i].c_str());
+            std::string s_Low = s_Names[i];
+            std::ranges::transform(s_Low, s_Low.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+            for (const char* s_Skip : {"twist", "roll", "fa_", "xtra", "cloth", "holster", "bag", "attach", "prop", "weapon",
+                     "skirt", "coat", "tie", "hair", "face", "jaw", "eye", "lip", "brow", "cheek", "tongue", "finger_", "_end"})
+                if (s_Low.find(s_Skip) != std::string::npos)
+                    s_Part = -1;
+
             s_Map.push_back(i == s_HipsBone ? 0 : s_Part == 0 ? -1 : s_Part);
             b.m_Bones.push_back(i);
         }
@@ -1027,8 +1035,17 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
 
     char s_Report[2048] = {};
 
-    if (nm_rig_check(s_N, s_RigParents.data(), s_Places.data(), s_Map.data(), s_Report, sizeof(s_Report)) > 0)
-        Logger::Warn("[Delirium] {}'s skeleton: {}", p_Name, s_Report);
+    const int s_Problems = nm_rig_check(s_N, s_RigParents.data(), s_Places.data(), s_Map.data(), s_Report, sizeof(s_Report));
+    Logger::Info("[Delirium] {}'s rig check: {} ({})", p_Name, s_Problems > 0 ? s_Report : "clean", s_Problems);
+    {
+        std::string s_Mapped;
+
+        for (int r = 0; r < s_N; ++r)
+            if (s_Map[r] >= 0)
+                s_Mapped += std::format("{}>{} ", s_Names[b.m_Bones[r]], s_Map[r]);
+
+        Logger::Info("[Delirium] {}'s map: {}", p_Name, s_Mapped);
+    }
 
     {
         const float* f = &b.m_Now[0];
@@ -1681,6 +1698,39 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     for (Body& b : m_Bodies) {
         if (b.m_Ragdoll)
             WritePose(b);
+
+        if (b.m_Ragdoll && (b.m_SpeedCheck -= p_Dt) <= 0.f) {
+            b.m_SpeedCheck = 1.f;
+            float s_Head[3];
+            int s_Up;
+            const float s_Lying = nm_agent_get_lying(b.m_Agent, s_Head, &s_Up);
+            std::vector<float> s_T(c_Parts * 7);
+            nm_agent_get_part_transforms(b.m_Agent, s_T.data(), c_Parts);
+
+            if (b.m_SpeedPrev.size() == s_T.size()) {
+                float s_Max = 0.f;
+                int s_Part = 0;
+
+                for (int k = 0; k < c_Parts; ++k) {
+                    const float v = (V(&s_T[k * 7]) - V(&b.m_SpeedPrev[k * 7])).Length() / b.m_SpeedDt;
+
+                    if (v > s_Max)
+                        s_Max = v, s_Part = k;
+                }
+
+                if (s_Max > 5.f && s_Lying > 0.5f) {
+                    char s_Pn[32] = {};
+                    nm_part_name(s_Part, s_Pn, sizeof(s_Pn));
+                    Logger::Warn("[Delirium] {}: lying {:.1f} s but its {} moves {:.1f} m/s (map or joints wrong?).", b.m_Name,
+                        s_Lying, s_Pn, s_Max);
+                }
+            }
+
+            b.m_SpeedPrev = std::move(s_T);
+            b.m_SpeedDt = 0.f;
+        }
+
+        b.m_SpeedDt += p_Dt;
 
         // Ragdolling: the character goes where its body goes (no walking off out of it).
         if (b.m_Ragdoll) {

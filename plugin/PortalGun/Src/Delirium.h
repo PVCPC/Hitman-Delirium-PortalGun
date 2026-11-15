@@ -80,6 +80,8 @@ private:
         std::vector<float> m_PoseA, m_PoseB; // the last two stepped poses (nm_rig_pose)
         int m_PoseHips = -1;
         SMatrix m_HeldRot; // its entity as it went down (held there, xy following the body)
+        float m_SpeedCheck = 1.f, m_SpeedDt = 0.f; // the lying-speed check
+        std::vector<float> m_SpeedPrev;
         float m_HeldZ = 0.f;
         std::vector<int> m_Bones;      // Hitman bone of each rig bone (the pelvis and everything under it)
         std::vector<int32_t> m_Parents; // Hitman's parents, every bone

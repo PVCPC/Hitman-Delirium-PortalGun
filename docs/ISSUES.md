@@ -12,7 +12,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 3 | 47's head twists a lot when ragdolled | open: neck/head bone map now logged, check next run |
 | 4 | 47 gets up with no animation (snaps upright); learned get-up doesn't work on him | partly: blend 1.2 s; NPCs now face the way the get-up ends (modding guide: feet if on the back, head if on the front). Real fix: Hitman's own get-up clip (no fitted-body get-up in the SDK yet, Pelican) |
 | 5 | Player can keep moving while ragdolled | built (same as 2) |
-| 6 | NPC models twist and contort around their Homer body | built: bodies fitted on the bind pose, not the walking frame (a bent elbow made a bent-armed body) |
+| 6 | NPC models twist and contort around their Homer body | built: bind-pose fit; parts baked on the bind pose; only main-chain bones drive parts (twist/roll/cloth/holster/face/extra bones left at rest); one bone-turn rule for all; rig check + map logged per NPC; lying bodies with a part over 5 m/s logged |
 | 7 | NPC Homers hover above their bodies, shake violently | built: ground rays ignore characters; NM stepped every frame |
 | 8 | NPCs fly into the sky when touched or ragdolled | built: standing NPCs no longer collide with other bodies (nm_agent_collide_agents) |
 | 9 | 47 snags on peds, standing or downed | built: bump from 0.95 m; a downed ped's game capsule is lifted over his head while it lies |
@@ -58,3 +58,4 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 34 | 47's belly sticks out | built: every body's capsules were drawn at Homer's default size, not its fitted size; drawn at its own now |
 | 35 | Huge hitches at portals / entering ragdoll | built: ground and wall scans run one body a frame instead of all at once; the log now times anything over 4 ms ([Hitch] lines) |
 | 36 | Homer capsules jitter between physics steps | built: drawn interpolated between steps, like the mesh |
+| 37 | Portal rims look like the October debug rings | built: Playroom rims (burning band, tongues, glow, grows open with a flash); "Playroom portal rims" in the Portals tab. Drawn over the screen: a wall in front doesn't hide them yet |
