@@ -1191,6 +1191,9 @@ void Delirium::Follow(Body& b) {
             b.m_FollowSet = nullptr;
         }
 
+        if (n == 0 && !b.m_Ragdoll && !b.m_Dead)
+            b.m_Follow = false;
+
         return;
     }
 
@@ -1524,7 +1527,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     s_Lap("check");
     // Homer's girth on a slim Hitman man (Billy: the stomach looks way too big): his Custom body with the trunk's width
     // and thickness 0.8 of his, then fitted (the fit takes this man's lengths, not his girth).
-    NmBuild* s_Slim = nm_build_sized(s_Base, 1.f, 1.f, 1.f, 0.8f, 1.f, 1.f, p_Female ? 58.f : 72.f, 0.f);
+    NmBuild* s_Slim = nm_build_sized(s_Base, 1.f, 1.f, 1.f, 0.65f, 1.f, 1.f, p_Female ? 58.f : 72.f, 0.f);
     b.m_Build = nm_build_fit_sized(s_Slim ? s_Slim : s_Base, s_Joints, NM_SIZE_REAL);
 
     if (s_Slim)
@@ -1535,7 +1538,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         return false;
     }
 
-    Logger::Info("[Delirium] {}: Homer fitted to its skeleton, trunk 0.8 wide ({:.0f} kg).", p_Name, nm_build_get_weight(b.m_Build));
+    Logger::Info("[Delirium] {}: Homer fitted to its skeleton, trunk 0.65 wide ({:.0f} kg).", p_Name, nm_build_get_weight(b.m_Build));
 
     const SVector3 s_Hips = V(&b.m_Now[0]);
     float s_Floor = s_Hips.z;
@@ -1976,6 +1979,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 if (!b.m_Ragdoll && !static_cast<ZActor*>(b.m_Char)->IsDead() && Functions::ZHM5BaseCharacter_DeactivateRagdoll)
                     Functions::ZHM5BaseCharacter_DeactivateRagdoll->Call(b.m_Char);
 
+                GameTook(b.m_Char);
                 Logger::Info("[Delirium] {}: up ({}).", b.m_Name, s_On ? "timed out" : "Hitman's get-up done");
                 b.m_Recover = 0.f;
             }
@@ -1984,10 +1988,19 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     // A kill: the game's death ragdoll runs (blocking it crashed), its bodies then follow NM's (Follow).
     for (Body& b : m_Bodies)
         if (b.m_Npc && !b.m_Follow && (b.m_Recover <= 0.f || static_cast<ZActor*>(b.m_Char)->IsDead()) &&
-            (GameTook(b.m_Char) || GameRagdollOn(b.m_Char))) {
-            Logger::Info("[Delirium] {}: the game ragdolled it (killed); its ragdoll follows Delirium's body.", b.m_Name);
+            (GameTook(b.m_Char), GameRagdollOn(b.m_Char))) {
+            // Only a ragdoll that's really on (the end of Hitman's get-up left a stale "took" that set this on a standing
+            // NPC: its next knock-down didn't stop its AI, the skeleton walked on). The body is Delirium's at once.
+            Logger::Info("[Delirium] {}: the game ragdolled it; its ragdoll follows Delirium's body.", b.m_Name);
             b.m_Follow = true;
             b.m_RigAtKill = b.m_RigWorld; // last frame's: what the mesh showed as the ragdoll was made
+
+            if (!b.m_Ragdoll && !b.m_Dead && !static_cast<ZActor*>(b.m_Char)->IsDead()) {
+                SetRagdoll(b, true);
+
+                if (b.m_Hit == 0)
+                    ShootAtAim(b);
+            }
 
             if (!b.m_Dead && static_cast<ZActor*>(b.m_Char)->IsDead()) {
                 b.m_Dead = true;
@@ -2187,14 +2200,10 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 s_Near = s_Near || SVector3(d.x, d.y, 0.f).Length() < 1.5f;
             }
 
-        // Pelican: with 47 out of NM's contacts he walked through downed NPCs; touching them, his keyframed body shoves.
-        if (s_Near != m_HitmanTouches) {
-            m_HitmanTouches = s_Near;
-            nm_agent_collide_agents(h->m_Agent, s_Near ? 1 : 0);
-        }
+        (void)s_Near; // 47 in NM's contacts (infinite mass, keyframed) flung bodies across the map (Billy): pushes only
 
         for (Body& b : m_Bodies) {
-            if (b.m_Npc && b.m_Ragdoll && s_Vel.Length() > 0.6f && !s_Near) {
+            if (b.m_Npc && b.m_Ragdoll && s_Vel.Length() > 0.6f) {
                 float p[3], q[4];
                 nm_agent_get_part_transform(b.m_Agent, 0, p, q);
                 SVector3 s_D = V(p) - s_Hips;
