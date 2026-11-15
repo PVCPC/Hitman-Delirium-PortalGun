@@ -670,6 +670,11 @@ void PortalGun::DrawPortalTab() {
     if (ImGui::Button(ICON_MD_CLEAR " CLEAR"))
         m_RequestClear = true;
 
+    static bool s_Easy = true;
+
+    if (ImGui::Checkbox("Easy placement (open on any wall)", &s_Easy))
+        dp_set_easy(s_Easy ? 1 : 0);
+
     if (ImGui::Checkbox("Rectangle portals", &g_Square))
         dp_set_rect(g_Square ? 1 : 0);
     ImGui::Checkbox("Playroom portal rims", &m_PlayroomRims);

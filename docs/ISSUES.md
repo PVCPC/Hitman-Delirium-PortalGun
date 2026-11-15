@@ -30,7 +30,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 13 | Half in, half out of a portal (Playroom ghosts) | open: the Playroom draws a second copy of the mesh through the portal with a clip plane at the exit; Hitman needs a second instance of the character's mesh on the same bones |
 | 14 | Portal cameras white / overexposed | built: cameras are picture-in-picture cameras now (the game's tonemapped path) |
 | 15 | Portals too loud | built: volume slider, 0.3 by default |
-| 16 | Portals only stick to perfectly flat surfaces | built: 10 cm / 37 degree tolerance |
+| 16 | Portals only stick to perfectly flat surfaces / hard to shoot on walls | built: walls count up to 20 cm bumpy and 53 degrees off; "Easy placement" (on by default) opens a portal where the shot hit even when Portal 2's fit rules say no, if there's wall at its centre |
 | 17 | How to shoot orange when right-click is aim | built: right-click fires orange with the gun out |
 | 25 | Portal shoots by itself when walking into a portal | built: only a real right click fires orange; no shots while 47 is down |
 | 26 | Game hitches when shooting or entering portals | built: placement casts about half the rays; the ragdoll dive (entering) is gone |

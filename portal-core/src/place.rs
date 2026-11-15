@@ -60,11 +60,15 @@ fn max_slide(half: Vec2) -> f32 {
 /// facing `n` at one unit.
 /// Hitman's surfaces are bumpy (bricks, siding, uneven collision): within `SLACK` of the plane and 37 degrees of
 /// its facing counts (Portal 2 wants half a unit and 11 degrees).
-const SLACK: f32 = 4.0 * U;
+const SLACK: f32 = 8.0 * U;
 
 fn surface_at(w: &dyn World, p: Vec3, n: Vec3) -> bool {
-    w.ray(p + n * SLACK, -n, 2.0 * SLACK).is_some_and(|h| h.distance > 0.0 && (h.distance - SLACK).abs() < SLACK && h.normal.dot(n) > 0.8)
+    w.ray(p + n * SLACK, -n, 2.0 * SLACK).is_some_and(|h| h.distance > 0.0 && (h.distance - SLACK).abs() < SLACK && h.normal.dot(n) > 0.6)
 }
+
+/// Easy placement (`dp_set_easy`): a shot that Portal 2's rules turn down (the wall too small, a ledge or a pipe in
+/// the way) still opens where it hit, overhanging if it must, as long as there's wall at the centre.
+pub static EASY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// The nearest thing sticking out of the surface between `from` and `to` (traced one unit in front of it,
 /// so the surface itself is not hit).
@@ -259,7 +263,12 @@ pub fn place(w: &dyn World, hit: Hit, shot_dir: Vec3, half: Vec2, others: &[Fram
     if !surface_at(w, frame.at, frame.normal()) {
         return Err(Fail::DoesNotFit);
     }
-    let mut fitted = Frame { at: fit_on_surface(w, frame, half).ok_or(Fail::DoesNotFit)?, rot: frame.rot };
+    let easy = EASY.load(std::sync::atomic::Ordering::Relaxed);
+    let at_hit = || if others.iter().any(|o| overlaps(&frame, half, o, half)) { Err(Fail::Overlap) } else { Ok(frame) };
+    let Some(at) = fit_on_surface(w, frame, half) else {
+        return if easy { at_hit() } else { Err(Fail::DoesNotFit) };
+    };
+    let mut fitted = Frame { at, rot: frame.rot };
     fitted.at = floor_snap(w, &fitted, half);
     // Final position is snapped to 1/512 u before use.
     let grid = U / 512.0;
@@ -268,7 +277,7 @@ pub fn place(w: &dyn World, hit: Hit, shot_dir: Vec3, half: Vec2, others: &[Fram
         return Err(Fail::Overlap);
     }
     if !corners_backed(w, &fitted, half) {
-        return Err(Fail::DoesNotFit);
+        return if easy { at_hit() } else { Err(Fail::DoesNotFit) };
     }
     Ok(fitted)
 }

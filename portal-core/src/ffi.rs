@@ -60,6 +60,12 @@ unsafe fn v3(p: *const [f32; 3]) -> Vec3 {
 }
 
 /// The opening's half size (m); Portal 2's to begin with.
+/// Easy placement (1, the default) or Portal 2's strict rules (0): see `place::EASY`.
+#[no_mangle]
+pub extern "C" fn dp_set_easy(on: i32) {
+    crate::place::EASY.store(on != 0, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Rectangle portals (1) or ovals (0): which opening things cross through.
 #[no_mangle]
 pub extern "C" fn dp_set_rect(on: i32) {
