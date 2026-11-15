@@ -77,6 +77,8 @@ private:
         bool m_GettingUp = false; // the learned get-up running
         float m_GetUpTime = 0.f;
         bool m_HighFall = false;
+        std::vector<float> m_PoseA, m_PoseB; // the last two stepped poses (nm_rig_pose)
+        int m_PoseHips = -1;
         SMatrix m_HeldRot; // its entity as it went down (held there, xy following the body)
         float m_HeldZ = 0.f;
         std::vector<int> m_Bones;      // Hitman bone of each rig bone (the pelvis and everything under it)
@@ -150,6 +152,9 @@ private:
     size_t m_PedsDrawn = 0;
     std::vector<SVector3> m_Lines; // skeleton lines, in pairs
     std::vector<std::string> m_Names; // the targets after 47, for the menu
+    float m_Accum = 0.f; // time toward the next 1/60 step
+    float m_Alpha = 0.f; // how far into it (drawing between steps)
+    bool m_Stepped = false;
     std::unordered_map<NmAgent*, float> m_LastGround; // the last ground under each body
     float m_GroundTimer = 0.f;
 };

@@ -8,9 +8,9 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | # | Issue | Status |
 |---|---|---|
 | 1 | 47's Homer doesn't line up with his model (A-pose, clipping into the ground) | built: inverted quaternions + fitted body. Billy: "good step forward, not quite" |
-| 2 | 47 shakes, worst when moving while ragdolled | built: movement blocked while down; NM stepped every frame (fixed 60 Hz jittered) |
+| 2 | 47 shakes, worst when moving while ragdolled | built: movement blocked while down; whole 1/60 steps, pose drawn between the last two (no 60 Hz judder) |
 | 3 | 47's head twists a lot when ragdolled | open: neck/head bone map now logged, check next run |
-| 4 | 47 stays down after falling / twitches on the ground, must get up | built: learned get-up capped at 5 s then blend to his animation; ground no longer sinks under him |
+| 4 | 47 stays down after falling / twitches on the ground, must get up | built: learned get-up gets its full 8 s on frozen ground, then blend to his animation; ground no longer sinks |
 | 5 | Player can keep moving while ragdolled | built (same as 2) |
 | 6 | NPC skeletons not on their bodies; NPCs jump and fly around (Numpad 1) | built: ground rays ignore characters, fitted bodies, keyframed until hit |
 | 7 | NPC Homers hover above their bodies, shake violently | built: ground rays ignore characters; NM stepped every frame |
