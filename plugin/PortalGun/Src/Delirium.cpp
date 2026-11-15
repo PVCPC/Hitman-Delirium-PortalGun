@@ -1525,20 +1525,33 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     // exactly on its bone, no length fight (shaking) or baked-in pelvis height (floating). REAL: one world, scale 1.
     NmBuild* s_Base = p_Female && m_Wilma ? m_Wilma : m_Build;
     s_Lap("check");
-    // Homer's girth on a slim Hitman man (Billy: the stomach looks way too big): his Custom body with the trunk's width
-    // and thickness 0.8 of his, then fitted (the fit takes this man's lengths, not his girth).
-    NmBuild* s_Slim = nm_build_sized(s_Base, 1.f, 1.f, 1.f, 0.65f, 1.f, 1.f, p_Female ? 58.f : 72.f, 0.f);
-    b.m_Build = nm_build_fit_sized(s_Slim ? s_Slim : s_Base, s_Joints, NM_SIZE_REAL);
-
-    if (s_Slim)
-        nm_build_destroy(s_Slim);
+    // Homer as the Playroom has him (every Custom slider 1, Pelican): width 0.65 thinned his arms and shoulders too.
+    b.m_Build = nm_build_fit_sized(s_Base, s_Joints, NM_SIZE_REAL);
 
     if (!b.m_Build) {
         Logger::Warn("[Delirium] {}: fit failed: {}", p_Name, LastError());
         return false;
     }
 
-    Logger::Info("[Delirium] {}: Homer fitted to its skeleton, trunk 0.65 wide ({:.0f} kg).", p_Name, nm_build_get_weight(b.m_Build));
+    Logger::Info("[Delirium] {}: Homer fitted to its skeleton ({:.0f} kg).", p_Name, nm_build_get_weight(b.m_Build));
+
+    // Once: each part's radius / half length, Homer's and fitted (Pelican: a spine part much shorter than his with the
+    // same radius means the fit put the spine joints too close).
+    static bool s_Table;
+
+    if (!std::exchange(s_Table, true)) {
+        std::string s_T;
+
+        for (int i = 0; i < c_Parts; ++i) {
+            float m, r0, h0, r1, h1;
+            int s_Par;
+            nm_build_part_info(s_Base, i, &m, &r0, &h0, &s_Par);
+            nm_build_part_info(b.m_Build, i, &m, &r1, &h1, &s_Par);
+            s_T += std::format("{}: r {:.3f}>{:.3f} h {:.3f}>{:.3f}; ", i, r0, r1, h0, h1);
+        }
+
+        Logger::Info("[Delirium] {}: parts, Homer > fitted: {}", p_Name, s_T);
+    }
 
     const SVector3 s_Hips = V(&b.m_Now[0]);
     float s_Floor = s_Hips.z;
@@ -1895,7 +1908,12 @@ void Delirium::Snapshot() {
             if (p_Build)
                 nm_build_part_info(p_Build, i, &m, &r, &h, &s_Parent);
 
-            s_Sizes.back().insert(s_Sizes.back().end(), {r, h});
+            float s_In[3], s_Box[3] = {};
+
+            if (nm_agent_get_part_body(a, i, &m, s_In, s_Box) != 2)
+                s_Box[0] = s_Box[1] = s_Box[2] = 0.f;
+
+            s_Sizes.back().insert(s_Sizes.back().end(), {r, h, s_Box[0], s_Box[1], s_Box[2]});
         }
 
         auto& [s_Prev, s_Cur] = m_DrawPose[a];
@@ -2469,7 +2487,6 @@ void Delirium::Draw3D(IRenderer* p_Renderer) {
             continue;
 
         const bool s_Picked = static_cast<int>(p) == m_Target;
-        const SVector4 s_Color = s_Picked ? SVector4(1.f, 0.6f, 0.1f, 1.f) : SVector4(0.9f, 0.9f, 0.9f, 1.f);
 
         for (int i = 0; i < c_Parts && i < static_cast<int>(m_Half.size()); ++i) {
             const float* s_T = &m_Pose[p][i * 7];
@@ -2477,24 +2494,53 @@ void Delirium::Draw3D(IRenderer* p_Renderer) {
             const SVector3 s_Y = Rotate(s_T + 3, SVector3(0.f, 1.f, 0.f));
             const SVector3 s_X = Rotate(s_T + 3, SVector3(1.f, 0.f, 0.f));
             const SVector3 s_Z = Rotate(s_T + 3, SVector3(0.f, 0.f, 1.f));
-            const bool s_Own = p < m_Sizes.size() && m_Sizes[p].size() == c_Parts * 2;
-            const float r = s_Own ? m_Sizes[p][i * 2] : m_Radius[i], h = s_Own ? m_Sizes[p][i * 2 + 1] : m_Half[i];
+            const bool s_Own = p < m_Sizes.size() && m_Sizes[p].size() == c_Parts * 5;
+            const float* z = s_Own ? &m_Sizes[p][i * 5] : nullptr;
+            const float r = z ? z[0] : m_Radius[i], h = z ? z[1] : m_Half[i];
 
-            // Each part's capsule: its two end rings and four lines between them.
-            constexpr int c_Seg = 10;
+            // Solid and shaded like the Playroom's (Billy: the outline's end rings read as two big circles in the
+            // torso; the spine parts are short wide capsules that only look like a body drawn whole). Its colours:
+            // one side blue, the other red, the trunk and head light grey; the body you aim at orange.
+            const SVector3 s_Base = s_Picked ? SVector3(1.f, 0.6f, 0.15f)
+                : (i >= 1 && i <= 3) || (i >= 13 && i <= 16) ? SVector3(0.25f, 0.45f, 0.95f)
+                : (i >= 4 && i <= 6) || (i >= 17 && i <= 20) ? SVector3(0.95f, 0.35f, 0.25f)
+                : SVector3(0.85f, 0.85f, 0.85f);
+            const SVector3 s_Light = SVector3(0.3f, 0.2f, 0.93f).Normalized();
+            const auto s_Shade = [&](const SVector3& n) {
+                const float k = 0.45f + 0.55f * std::max(0.f, n.Dot(s_Light));
+                return SVector4(s_Base.x * k, s_Base.y * k, s_Base.z * k, 0.8f);
+            };
 
-            for (const float s_End : {-h, h}) {
-                for (int k = 0; k < c_Seg; ++k) {
-                    const float a0 = 2.f * std::numbers::pi_v<float> * k / c_Seg;
-                    const float a1 = 2.f * std::numbers::pi_v<float> * (k + 1) / c_Seg;
-                    const SVector3 s_P0 = s_C + s_Y * s_End + (s_X * std::cos(a0) + s_Z * std::sin(a0)) * r;
-                    const SVector3 s_P1 = s_C + s_Y * s_End + (s_X * std::cos(a1) + s_Z * std::sin(a1)) * r;
-                    p_Renderer->DrawLine3D(s_P0, s_P1, s_Color, s_Color);
-                }
+            if (z && (z[2] > 0.f || z[3] > 0.f || z[4] > 0.f)) { // a foot: NM's box
+                const SVector3 e[3] = {s_X * z[2], s_Y * z[3], s_Z * z[4]};
+
+                for (int f = 0; f < 3; ++f)
+                    for (const float sg : {-1.f, 1.f}) {
+                        const SVector3 n = e[f] * sg, u = e[(f + 1) % 3], v = e[(f + 2) % 3];
+                        const SVector4 c = s_Shade(n.Normalized());
+                        p_Renderer->DrawQuad3D(s_C + n - u - v, c, s_C + n + u - v, c, s_C + n + u + v, c, s_C + n - u + v, c);
+                    }
+
+                continue;
             }
 
-            for (const SVector3& s_Off : {s_X * r, s_X * -r, s_Z * r, s_Z * -r})
-                p_Renderer->DrawLine3D(s_C - s_Y * h + s_Off, s_C + s_Y * h + s_Off, s_Color, s_Color);
+            // A capsule: two hemispheres h either side of the centre along its Y, joined by a cylinder.
+            constexpr int c_Seg = 10, c_Lat = 3;
+            const auto s_Point = [&](int k, int l, SVector3& n) {
+                const bool s_Top = l > c_Lat; // rings 0..c_Lat the bottom cap, the rest the top
+                const float s_Phi = std::numbers::pi_v<float> * 0.5f * (s_Top ? l - c_Lat - 1 : l - c_Lat) / c_Lat;
+                const float a = 2.f * std::numbers::pi_v<float> * k / c_Seg;
+                n = (s_X * std::cos(a) + s_Z * std::sin(a)) * std::cos(s_Phi) + s_Y * std::sin(s_Phi);
+                return s_C + s_Y * (s_Top ? h : -h) + n * r;
+            };
+
+            for (int l = 0; l < 2 * c_Lat + 1; ++l)
+                for (int k = 0; k < c_Seg; ++k) {
+                    SVector3 n0, n1, n2, n3;
+                    const SVector3 p0 = s_Point(k, l, n0), p1 = s_Point(k + 1, l, n1);
+                    const SVector3 p2 = s_Point(k + 1, l + 1, n2), p3 = s_Point(k, l + 1, n3);
+                    p_Renderer->DrawQuad3D(p0, s_Shade(n0), p1, s_Shade(n1), p2, s_Shade(n2), p3, s_Shade(n3));
+                }
         }
     }
 }

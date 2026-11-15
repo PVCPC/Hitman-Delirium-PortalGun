@@ -167,7 +167,7 @@ private:
     std::vector<Ped> m_Peds;
     std::vector<std::string> m_Messages;
     std::vector<float> m_Radius, m_Half;
-    std::vector<std::vector<float>> m_Sizes; // per drawn body: each part's radius and half length
+    std::vector<std::vector<float>> m_Sizes; // per drawn body: each part's radius, half length and box half extents (feet; zeros a capsule)
 
     // Requests from the menu (UI thread), done on the game thread.
     std::mutex m_Mutex;
