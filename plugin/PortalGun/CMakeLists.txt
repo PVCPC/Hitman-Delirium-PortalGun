@@ -4,7 +4,7 @@ file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS Src/*.cpp Src/*.h)
 
 add_library(PortalGun SHARED ${SRC_FILES})
 target_include_directories(PortalGun PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Src)
-target_link_libraries(PortalGun PRIVATE ZHMModSDK)
+target_link_libraries(PortalGun PRIVATE ZHMModSDK minhook)
 
 
 # Delirium's portal code (Rust): built with cargo, linked in statically.

@@ -6,6 +6,8 @@
 #include <Glacier/ZOutfit.h>
 #include <Glacier/ZSpatialEntity.h>
 #include <Globals.h>
+#include <Functions.h>
+#include <MinHook.h>
 
 #include "PortalLog.h"
 #define Logger PortalLog
@@ -20,6 +22,7 @@
 #include <cmath>
 #include <format>
 #include <numbers>
+#include <unordered_set>
 
 #include "gta4nm.h"
 
@@ -97,6 +100,41 @@ namespace {
         return std::atan2(r.x, -r.y); // forward = up x right
     }
 
+    // The characters Delirium drives: the game's own ragdoll (death, knockouts) is kept off them, NM's pose is shown.
+    std::mutex g_OwnedMutex;
+    std::unordered_set<void*> g_Owned;
+    void (*g_Ragdoll)(ZHM5BaseCharacter*, bool) = nullptr;
+    void (*g_Powered)(ZHM5BaseCharacter*, float, bool, bool, float, bool) = nullptr;
+    void* g_RagdollAt = nullptr;
+    void* g_PoweredAt = nullptr;
+
+    bool Owned(void* p_Char) {
+        std::scoped_lock s_Lock(g_OwnedMutex);
+        return g_Owned.contains(p_Char);
+    }
+
+    void Own(void* p_Char, bool p_On) {
+        std::scoped_lock s_Lock(g_OwnedMutex);
+
+        if (p_On)
+            g_Owned.insert(p_Char);
+        else
+            g_Owned.erase(p_Char);
+    }
+
+    void HkRagdoll(ZHM5BaseCharacter* c, bool p_InMotion) {
+        if (!Owned(c))
+            g_Ragdoll(c, p_InMotion);
+    }
+
+    void HkPowered(ZHM5BaseCharacter* c, float t, bool p_InMotion, bool p_Upper, float a5, bool a6) {
+        if (!Owned(c))
+            g_Powered(c, t, p_InMotion, p_Upper, a5, a6);
+    }
+
+    // An EngineFunction's address (its only member).
+    void* AddressOf(const void* p_Function) { return p_Function ? *static_cast<void* const*>(p_Function) : nullptr; }
+
     std::string LastError() {
         char s_Buf[512] = {};
         nm_last_error(s_Buf, sizeof(s_Buf));
@@ -123,6 +161,22 @@ namespace {
 void Delirium::Configure(const std::filesystem::path& p_Dir, const std::string& p_Gta4) {
     m_Dir = p_Dir;
     m_Gta4 = p_Gta4;
+
+    // ponytail: dead NPCs with a body then have no game ragdoll at all (dragging and dumping them may look off).
+    if (!g_RagdollAt) {
+        MH_Initialize();
+        g_RagdollAt = AddressOf(Functions::ZHM5BaseCharacter_ActivateRagdoll);
+        g_PoweredAt = AddressOf(Functions::ZHM5BaseCharacter_ActivatePoweredRagdoll);
+
+        if (g_RagdollAt && MH_CreateHook(g_RagdollAt, reinterpret_cast<void*>(&HkRagdoll), reinterpret_cast<void**>(&g_Ragdoll)) == MH_OK)
+            MH_EnableHook(g_RagdollAt);
+
+        if (g_PoweredAt && MH_CreateHook(g_PoweredAt, reinterpret_cast<void*>(&HkPowered), reinterpret_cast<void**>(&g_Powered)) == MH_OK)
+            MH_EnableHook(g_PoweredAt);
+
+        Logger::Info("[Delirium] Game ragdoll hooks: {} {}.", g_Ragdoll ? "ragdoll" : "NO ragdoll",
+            g_Powered ? "powered" : "NO powered");
+    }
 }
 
 bool Delirium::Start() {
@@ -714,11 +768,19 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
 
     Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Build == m_Wilma ? "Wilma" : "Homer", n,
         s_N);
+    Own(b.m_Char, true);
     m_Bodies.push_back(std::move(b));
     return true;
 }
 
+void Delirium::Unhook() {
+    for (void* p : {g_RagdollAt, g_PoweredAt})
+        if (p)
+            MH_DisableHook(p);
+}
+
 void Delirium::Detach(Body& p_Body) {
+    Own(p_Body.m_Char, false);
     Bones::Override(p_Body.m_Anim, {});
 
     if (p_Body.m_Rig)

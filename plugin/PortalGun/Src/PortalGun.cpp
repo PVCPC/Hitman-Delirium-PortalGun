@@ -211,6 +211,7 @@ PortalGun::PortalGun() :
 
 PortalGun::~PortalGun() {
     Bones::Uninstall();
+    Delirium::Unhook();
     const ZMemberDelegate<PortalGun, void(const SGameUpdateEvent&)> s_Delegate(this, &PortalGun::OnFrameUpdate);
     Globals::GameLoopManager->UnregisterFrameUpdate(s_Delegate, 1, EUpdateMode::eUpdatePlayMode);
 }

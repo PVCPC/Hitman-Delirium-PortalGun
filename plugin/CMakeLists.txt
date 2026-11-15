@@ -19,6 +19,20 @@ set(DXHEADERS_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(DXHEADERS_BUILD_GOOGLE_TEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(DirectXHeaders)
 
+# MinHook: to keep the game's own death ragdoll off characters Delirium is driving.
+FetchContent_Declare(minhook
+        GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
+        GIT_TAG v1.3.3
+        GIT_SHALLOW TRUE)
+FetchContent_GetProperties(minhook)
+if(NOT minhook_POPULATED)
+    FetchContent_Populate(minhook)
+endif()
+enable_language(C)
+file(GLOB MINHOOK_SRC ${minhook_SOURCE_DIR}/src/*.c ${minhook_SOURCE_DIR}/src/hde/hde64.c)
+add_library(minhook STATIC ${MINHOOK_SRC})
+target_include_directories(minhook PUBLIC ${minhook_SOURCE_DIR}/include)
+
 add_subdirectory(${ZHM_SDK_DIR} ZHMModSDK)
 target_link_libraries(ZHMModSDK INTERFACE Microsoft::DirectX-Headers implot)
 include(${ZHM_SDK_DIR}/cmake/zhm-mod.cmake)

@@ -35,6 +35,7 @@ public:
     void Draw3D(IRenderer* p_Renderer);
     void DrawMenu();
     void Clear();
+    static void Unhook(); // unloading: the game's ragdoll back as it was
 
     // The hotkeys' states (shown in the menu): Delirium on NPCs, and 47 ragdolling.
     bool m_NpcMode = false;
