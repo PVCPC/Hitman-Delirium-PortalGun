@@ -459,6 +459,11 @@ void Delirium::Clear() {
     m_Peds.clear();
     m_Walls.clear();
     m_PatchAt.clear();
+    m_HitmanTouches = false;
+    {
+        std::scoped_lock s_Held(g_HeldMutex);
+        g_Held.clear();
+    }
     std::scoped_lock s_Lock(m_Mutex);
     m_Pose.clear();
     m_Names.clear();
@@ -1105,7 +1110,51 @@ namespace {
 
     // ZPhysicsObject's vtable: 65 IsKinematic, 66 SetKinematic(bool, bool) (HITMAN3).
     bool IsKinematic(void* p) { return (*reinterpret_cast<bool(***)(void*)>(p))[65](p); }
-    void SetKinematic(void* p, bool p_On) { (*reinterpret_cast<void(***)(void*, bool, bool)>(p))[66](p, p_On, true); }
+
+    // Bodies of downed NPCs that NM drives: the game turned them all dynamic again every so often, they fell a step on
+    // their own and were teleported back (Pelican: the jitter, "fighting"). Its SetKinematic(false) on them is dropped.
+    using SetKinematicFn = void (*)(void*, bool, bool);
+    SetKinematicFn g_SetKinematic = nullptr;
+    std::unordered_set<void*> g_Held;
+    std::mutex g_HeldMutex;
+
+    void HkSetKinematic(void* p, bool p_On, bool p_Wake) {
+        if (!p_On) {
+            std::scoped_lock s_Lock(g_HeldMutex);
+
+            if (g_Held.contains(p))
+                return;
+        }
+
+        g_SetKinematic(p, p_On, p_Wake);
+    }
+
+    void HookSetKinematic(void* p) {
+        if (g_SetKinematic)
+            return;
+
+        auto** s_Slot = &(*reinterpret_cast<void***>(p))[66];
+        DWORD s_Old;
+
+        if (VirtualProtect(s_Slot, sizeof(void*), PAGE_READWRITE, &s_Old)) {
+            g_SetKinematic = reinterpret_cast<SetKinematicFn>(*s_Slot);
+            *s_Slot = reinterpret_cast<void*>(&HkSetKinematic);
+            VirtualProtect(s_Slot, sizeof(void*), s_Old, &s_Old);
+            Logger::Info("[Delirium] The game's SetKinematic on NM's ragdoll bodies is held.");
+        }
+    }
+
+    void Hold(void* p, bool p_On) {
+        std::scoped_lock s_Lock(g_HeldMutex);
+        p_On ? (void)g_Held.insert(p) : (void)g_Held.erase(p);
+    }
+
+    void SetKinematic(void* p, bool p_On) {
+        if (!p_On)
+            Hold(p, false);
+
+        (*reinterpret_cast<void(***)(void*, bool, bool)>(p))[66](p, p_On, true);
+    }
 
     SMatrix ToMatrix(const Q& q, const SVector3& p) {
         SMatrix m;
@@ -1191,6 +1240,9 @@ void Delirium::Follow(Body& b) {
 
         if (r < 0)
             continue;
+
+        HookSetKinematic(s_Bodies[i]);
+        Hold(s_Bodies[i], true);
 
         if (!IsKinematic(s_Bodies[i]))
             SetKinematic(s_Bodies[i], true), ++s_Lost;
@@ -1466,21 +1518,20 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     // exactly on its bone, no length fight (shaking) or baked-in pelvis height (floating). REAL: one world, scale 1.
     NmBuild* s_Base = p_Female && m_Wilma ? m_Wilma : m_Build;
     s_Lap("check");
-    b.m_Build = nm_build_fit_sized(s_Base, s_Joints, NM_SIZE_REAL);
+    // Homer's girth on a slim Hitman man (Billy: the stomach looks way too big): his Custom body with the trunk's width
+    // and thickness 0.8 of his, then fitted (the fit takes this man's lengths, not his girth).
+    NmBuild* s_Slim = nm_build_sized(s_Base, 1.f, 1.f, 1.f, 0.8f, 1.f, 1.f, p_Female ? 58.f : 72.f, 0.f);
+    b.m_Build = nm_build_fit_sized(s_Slim ? s_Slim : s_Base, s_Joints, NM_SIZE_REAL);
+
+    if (s_Slim)
+        nm_build_destroy(s_Slim);
 
     if (!b.m_Build) {
         Logger::Warn("[Delirium] {}: fit failed: {}", p_Name, LastError());
         return false;
     }
 
-    // Fred's girth on a slim Hitman man (Billy: the stomach looks way too big): weighed as a slim man, which thins every
-    // capsule alike (SDK: by the weight's fourth root, within a third to three times the fitted weight).
-    {
-        const float s_Was = nm_build_get_weight(b.m_Build);
-        const float s_Kg = std::clamp(p_Female ? 58.f : 72.f, s_Was / 3.f + 0.5f, s_Was * 3.f - 0.5f);
-        nm_build_set_weight(b.m_Build, s_Kg);
-        Logger::Info("[Delirium] {}: weighed {:.0f} kg as fitted, now {:.0f} kg.", p_Name, s_Was, nm_build_get_weight(b.m_Build));
-    }
+    Logger::Info("[Delirium] {}: Homer fitted to its skeleton, trunk 0.8 wide ({:.0f} kg).", p_Name, nm_build_get_weight(b.m_Build));
 
     const SVector3 s_Hips = V(&b.m_Now[0]);
     float s_Floor = s_Hips.z;
@@ -1589,9 +1640,6 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     // Keyframed parts can't move, so a keyframed NPC stays out of the other bodies' contacts until it ragdolls.
     nm_agent_keyframe(b.m_Agent, "fb", 1);
     nm_agent_collide_agents(b.m_Agent, 0);
-    // The live pose lies outside Fred's joints (upper arm ~1.9x its range): keyframed parts were pulled to the limits
-    // and buzzed there (Billy: arms twitch and jitter a lot). The SDK's fix: joints re-centred on this pose.
-    Logger::Info("[Delirium] {}: {} joints re-centred on its pose.", p_Name, nm_agent_recentre_joint(b.m_Agent, -1));
 
     Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Base == m_Wilma ? "Wilma" : "Homer", n,
         s_N);
@@ -2127,8 +2175,22 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         m_HitmanHips = s_Hips;
         m_HadHitmanHips = true;
 
+        bool s_Near = false;
+
+        for (const Body& b : m_Bodies)
+            if (b.m_Npc && b.m_Ragdoll && b.m_Now.size() >= 3) {
+                const SVector3 d = V(b.m_Now.data()) - s_Hips;
+                s_Near = s_Near || SVector3(d.x, d.y, 0.f).Length() < 1.5f;
+            }
+
+        // Pelican: with 47 out of NM's contacts he walked through downed NPCs; touching them, his keyframed body shoves.
+        if (s_Near != m_HitmanTouches) {
+            m_HitmanTouches = s_Near;
+            nm_agent_collide_agents(h->m_Agent, s_Near ? 1 : 0);
+        }
+
         for (Body& b : m_Bodies) {
-            if (b.m_Npc && b.m_Ragdoll && s_Vel.Length() > 0.6f) {
+            if (b.m_Npc && b.m_Ragdoll && s_Vel.Length() > 0.6f && !s_Near) {
                 float p[3], q[4];
                 nm_agent_get_part_transform(b.m_Agent, 0, p, q);
                 SVector3 s_D = V(p) - s_Hips;
