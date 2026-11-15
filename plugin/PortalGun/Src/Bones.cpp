@@ -16,6 +16,8 @@
 #include <Logging.h>
 #include "PortalLog.h"
 
+#define Logger PortalLog
+
 namespace {
     using UpdateFn = void(*)(void*, const void*, uint8_t*, const void*, void*, void*, void*);
 

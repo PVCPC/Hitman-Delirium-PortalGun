@@ -46,6 +46,24 @@ struct HitchTimer {
     }
 };
 
+struct Laps {
+    const std::string& m_Who;
+    std::chrono::steady_clock::time_point m_Start = std::chrono::steady_clock::now(), m_Last = m_Start;
+    std::string m_Out;
+    void operator()(const char* p_What) {
+        const auto s_Now = std::chrono::steady_clock::now();
+        m_Out += std::format("{} {:.1f}, ", p_What, std::chrono::duration<float, std::milli>(s_Now - m_Last).count());
+        m_Last = s_Now;
+    }
+    ~Laps() {
+        const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - m_Start).count();
+
+        if (ms > 4.f)
+            Logger::Info("[Hitch] {}'s body: {:.1f} ms ({}rest {:.1f}).", m_Who, ms, m_Out,
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - m_Last).count());
+    }
+};
+
 namespace {
     constexpr float c_Step = 1.f / 60.f;
     constexpr int c_Parts = 21;
@@ -392,8 +410,8 @@ void Delirium::Spawn(const Ray& p_Ray, const SVector3& p_Feet, const SVector3& p
 // ponytail: ground only, walls and ledges need side rays or the level's real collision mesh.
 void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
     HitchTimer s_T {p_One ? "Ground patch" : "Ground patches"};
-    constexpr int c_N = 7;
-    constexpr float c_Spacing = 0.5f;
+    constexpr int c_N = 5;
+    constexpr float c_Spacing = 0.75f;
 
     std::vector<NmAgent*> s_Agents;
 
@@ -475,8 +493,8 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
         // open portal: bodies go into it).
         const float s_Floor = s_Last->second;
 
-        for (int k = 0; k < 16; ++k) {
-            const float s_Ang = k * 6.2831853f / 16.f;
+        for (int k = 0; k < 8; ++k) {
+            const float s_Ang = k * 6.2831853f / 8.f;
             const SVector3 s_Dir(std::cos(s_Ang), std::sin(s_Ang), 0.f);
 
             for (const float s_H : {0.4f, 1.2f}) {
@@ -830,6 +848,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     b.m_Spatial = p_Spatial;
     b.m_Npc = p_Npc;
     b.m_Name = p_Name;
+    Laps s_Lap {p_Name};
     // The rig (names, parents) from the morpheme entity; the pose from what draws him (47: his own animator).
     void* s_Rig = Bones::Animator(p_Char);
     // ponytail: 47's own animator (Bones::HitmanAnimator) gave a pose that isn't his mesh's (arms up), so the morpheme's.
@@ -842,6 +861,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         return false;
 
     const int n = static_cast<int>(s_Local.size());
+    s_Lap("read");
 
     if (s_RigLocal.size() != s_Local.size()) {
         Logger::Warn("[Delirium] {}: animator has {} bones, morpheme {}.", p_Name, s_Local.size(), s_RigLocal.size());
@@ -875,6 +895,8 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         Logger::Warn("[Delirium] {}: no bone names found, no body.", p_Name);
         return false;
     }
+
+    s_Lap("names");
 
     // Which way Glacier's bone turns go (once): the one that stands the skeleton up like a person wins.
     if (!g_ConjKnown) {
@@ -923,6 +945,8 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
                 g_Conj ? "INVERTED" : "as stored", s_Score[0], s_Score[1]);
         }
     }
+
+    s_Lap("turns");
 
     if (!p_Npc) {
         std::string s_Map;
@@ -1010,6 +1034,8 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     }
 
     // The pose it stands in now is the rest pose (an idle's: arms down, as Homer stands; Pelican's advice).
+    s_Lap("map");
+
     if (!Posed(b))
         return false;
 
@@ -1040,6 +1066,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
 
     char s_Report[2048] = {};
 
+    s_Lap("pose");
     const int s_Problems = nm_rig_check(s_N, s_RigParents.data(), s_Places.data(), s_Map.data(), s_Report, sizeof(s_Report));
     Logger::Info("[Delirium] {}'s rig check: {} ({})", p_Name, s_Problems > 0 ? s_Report : "clean", s_Problems);
     {
@@ -1075,6 +1102,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     // Homer (or Wilma) fitted to this character's own proportions (Pelican): the keyframe then puts every part
     // exactly on its bone, no length fight (shaking) or baked-in pelvis height (floating). REAL: one world, scale 1.
     NmBuild* s_Base = p_Female && m_Wilma ? m_Wilma : m_Build;
+    s_Lap("check");
     b.m_Build = nm_build_fit_sized(s_Base, s_Joints, NM_SIZE_REAL);
 
     if (!b.m_Build) {
@@ -1094,6 +1122,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         s_Floor = s_Hit.z;
 
     const float s_At[3] = {s_Hips.x, s_Hips.y, s_Floor};
+    s_Lap("fit+ray");
     b.m_Agent = nm_agent_create(b.m_Build, s_At, 0.f, 0.37f);
 
     if (b.m_Agent) {
@@ -1121,6 +1150,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
             p_Name, s_WorstPart, s_Worst);
     }
 
+    s_Lap("agent");
     b.m_Rig = b.m_Agent ? nm_rig_create(b.m_Agent, s_N, s_RigParents.data(), s_Rest.data(), s_Map.data()) : nullptr;
 
     if (!b.m_Rig) {
@@ -1133,6 +1163,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         return false;
     }
 
+    s_Lap("rig");
     nm_rig_take(b.m_Rig, b.m_Agent, b.m_Now.data(), nullptr, 0.f);
 
     // On its animation exactly until hit or killed (GTA IV's way); a free half-ragdoll walking it sent them flying.
@@ -1400,14 +1431,13 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     m_Aim = p_Aim;
     Bones::Tick();
 
-    std::erase_if(m_Bodies, [&](Body& b) {
-        if (!b.m_Npc || !GameTook(b.m_Char))
-            return false;
+    for (Body& b : m_Bodies)
+        if (b.m_Npc && GameTook(b.m_Char) && !b.m_Dead) {
+            b.m_Shot = true;
+            Logger::Info("[Delirium] {}: shot (the game ragdolls it underneath; Delirium's body takes the hit).", b.m_Name);
+        }
 
-        Logger::Info("[Delirium] {}: the game ragdolled it (shot or killed); Delirium lets it go.", b.m_Name);
-        Detach(b);
-        return true;
-    });
+    UpdateCripple();
 
     // Numpad 1: Delirium on NPCs. Numpad 2: 47 ragdolls. Numpad 5 / 6: shoot / push the body you aim at.
     static bool s_K1, s_K2, s_K5, s_K6;
@@ -1513,9 +1543,13 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
         // A kill in Hitman: he drops (Delirium's death, not the game's).
         // ponytail: the game's own death ragdoll still takes the body over; detour ActivateRagdoll to keep NM's.
-        if (b.m_Npc && !b.m_Dead && static_cast<ZActor*>(b.m_Char)->IsDead()) {
+        if (b.m_Npc && !b.m_Dead && (b.m_Shot || static_cast<ZActor*>(b.m_Char)->IsDead())) {
             b.m_Dead = true;
             SetRagdoll(b, true);
+
+            if (b.m_Shot)
+                ShootAtAim(b);
+
             nm_agent_set_dead(b.m_Agent, 1);
         }
     }
@@ -1709,8 +1743,18 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     // NM's pose out onto the ragdolling ones.
     for (Body& b : m_Bodies) {
-        if (b.m_Ragdoll)
+        // Ragdolling: the character goes where its body goes (no walking off out of it), then the pose onto it.
+        if (b.m_Ragdoll) {
+            float s_Pos[3], s_Rot[4];
+            nm_agent_get_part_transform(b.m_Agent, 0, s_Pos, s_Rot);
+            SMatrix s_M = b.m_HeldRot;
+            s_M.Trans.x = s_Pos[0];
+            s_M.Trans.y = s_Pos[1];
+            s_M.Trans.z = b.m_HeldZ + (b.m_Npc ? c_CapsuleLift : 0.f);
+            b.m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
+            Posed(b);
             WritePose(b);
+        }
 
         if (b.m_Ragdoll && (b.m_SpeedCheck -= p_Dt) <= 0.f) {
             b.m_SpeedCheck = 1.f;
@@ -1764,17 +1808,6 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         }
 
         b.m_SpeedDt += p_Dt;
-
-        // Ragdolling: the character goes where its body goes (no walking off out of it).
-        if (b.m_Ragdoll) {
-            float s_Pos[3], s_Rot[4];
-            nm_agent_get_part_transform(b.m_Agent, 0, s_Pos, s_Rot);
-            SMatrix s_M = b.m_HeldRot;
-            s_M.Trans.x = s_Pos[0];
-            s_M.Trans.y = s_Pos[1];
-            s_M.Trans.z = b.m_HeldZ + (b.m_Npc ? c_CapsuleLift : 0.f);
-            b.m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
-        }
     }
 
     Snapshot();
@@ -1827,6 +1860,14 @@ void Delirium::DrawMenu() {
     ImGui::Checkbox("47's Homer body", &m_HitmanBody);
     ImGui::SameLine();
     ImGui::Checkbox("Show bodies", &m_ShowBodies);
+
+    if (ImGui::Checkbox("47 invincible", &m_Invincible))
+        m_CrippleDirty = true;
+
+    ImGui::SameLine();
+
+    if (ImGui::Checkbox("Never wanted (AI ignores 47)", &m_Hidden))
+        m_CrippleDirty = true;
     ImGui::TextDisabled("Num1 NPCs: %s   Num2 47 ragdoll: %s   Num5/6 shoot/push", m_NpcMode ? "ON" : "off",
         m_HitmanRagdoll ? "ON" : "off");
     ImGui::Separator();
@@ -1981,4 +2022,65 @@ void Delirium::SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facin
 
     m_Line = std::format("Spawned {} (dressed as {}).", s_Actor->m_sActorName.c_str(), s_Model->m_sActorName.c_str());
     Logger::Info("[Delirium] {}", m_Line);
+}
+
+// A bullet into the part nearest 47's aim (the game's shot ragdolls it underneath; NM's body is what shows).
+void Delirium::ShootAtAim(Body& b) {
+    int s_Part = 0;
+    float s_Best = 1e9f, s_At[3] = {};
+
+    for (int i = 0; i < c_Parts; ++i) {
+        float p[3], q[4];
+        nm_agent_get_part_transform(b.m_Agent, i, p, q);
+        const SVector3 d = V(p) - m_Eye;
+        const float t = std::max(0.f, d.x * m_Aim.x + d.y * m_Aim.y + d.z * m_Aim.z);
+        const float s_Off = (d - m_Aim * t).Length();
+
+        if (s_Off < s_Best)
+            s_Best = s_Off, s_Part = i, std::copy_n(p, 3, s_At);
+    }
+
+    const float s_Dir[3] = {m_Aim.x, m_Aim.y, m_Aim.z};
+    nm_agent_task_shot(b.m_Agent, m_World, "*", s_Part, s_At, s_Dir, 0.f);
+}
+
+// 47 invincible / hidden from the AI, as the SDK's Player mod does it (an AI cripple entity's pins), once per level.
+void Delirium::UpdateCripple() {
+    const auto s_Scene = Globals::Hitman5Module->m_pEntitySceneContext->m_pScene;
+
+    if (!s_Scene)
+        return;
+
+    if (s_Scene.m_pInterfaceRef != m_CrippleScene) {
+        m_CrippleScene = s_Scene.m_pInterfaceRef;
+        m_Cripple = {};
+        m_CrippleDirty = m_Invincible || m_Hidden;
+    }
+
+    if (!m_CrippleDirty)
+        return;
+
+    m_CrippleDirty = false;
+
+    if (!m_Cripple) {
+        TResourcePtr<ZTemplateEntityFactory> s_Factory;
+        Globals::ResourceManager->LoadResource(s_Factory, ResId<"[modules:/zaicrippleentity.class].pc_entitytype">);
+
+        if (!s_Factory) {
+            m_Line = "Can't make 47 invincible / hidden: the AI cripple class didn't load.";
+            return;
+        }
+
+        SExternalReferences s_Refs;
+        Functions::ZEntityManager_NewEntity->Call(Globals::EntityManager, m_Cripple, "", s_Factory, s_Scene.m_entityRef, s_Refs, -1);
+
+        if (!m_Cripple) {
+            m_Line = "Can't make 47 invincible / hidden: the game didn't make the entity.";
+            return;
+        }
+    }
+
+    m_Cripple.SignalInputPin(std::string(m_Invincible ? "SetHeroInvincible" : "SetHeroVulnerable"));
+    m_Cripple.SignalInputPin(std::string(m_Hidden ? "SetHeroHidden" : "SetHeroVisible"));
+    Logger::Info("[Delirium] 47 {}, {}.", m_Invincible ? "invincible" : "vulnerable", m_Hidden ? "hidden from the AI" : "seen by the AI");
 }

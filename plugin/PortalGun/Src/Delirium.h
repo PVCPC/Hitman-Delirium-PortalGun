@@ -7,6 +7,7 @@
 #include <delirium_portal.h>
 
 #include <Glacier/ZMath.h>
+#include <Glacier/ZEntity.h>
 
 #include "Bones.h"
 
@@ -89,6 +90,7 @@ private:
         std::vector<Bones::SQV> m_Local; // the animation's pose this frame (Hitman's, every bone)
         std::vector<float> m_World;    // every bone's world frame this frame (7 floats each)
         bool m_Dead = false;
+        bool m_Shot = false; // the game ragdolled it (shot): NM takes the hit
         int m_Layout = -1;
         bool m_Npc = false;
         bool m_Ragdoll = false;
@@ -140,6 +142,11 @@ private:
     std::mutex m_Mutex;
     bool m_WantSpawn = false;
     bool m_WantNpc = false;
+    bool m_Invincible = false, m_Hidden = false, m_CrippleDirty = false;
+    void* m_CrippleScene = nullptr;
+    ZEntityRef m_Cripple;
+    void UpdateCripple();
+    void ShootAtAim(Body& b);
     void SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facing);
     bool m_WantClear = false;
     std::vector<std::pair<int, std::string>> m_WantFire; // target (0 = 47), action

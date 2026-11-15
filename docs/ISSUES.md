@@ -28,7 +28,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 |---|---|---|
 | 12 | Walking through portals | confirmed: Billy walks through |
 | 13 | Half in, half out of a portal (Playroom ghosts) | open: the Playroom draws a second copy of the mesh through the portal with a clip plane at the exit; Hitman needs a second instance of the character's mesh on the same bones |
-| 14 | Portal cameras white / overexposed | built: cameras are picture-in-picture cameras now (the game's tonemapped path) |
+| 14 | Portal cameras white / overexposed | open again: picture-in-picture only drew the view in the HUD's corner picture (Billy, 11-15); back off. Was: cameras are picture-in-picture cameras now (the game's tonemapped path) |
 | 15 | Portals too loud | built: volume slider, 0.3 by default |
 | 16 | Portals only stick to perfectly flat surfaces / hard to shoot on walls | built: walls count up to 20 cm bumpy and 53 degrees off; "Easy placement" (on by default) opens a portal where the shot hit even when Portal 2's fit rules say no, if there's wall at its centre |
 | 17 | How to shoot orange when right-click is aim | built: right-click fires orange with the gun out |
@@ -59,3 +59,9 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 35 | Huge hitches at portals / entering ragdoll | built: ground and wall scans run one body a frame instead of all at once; the log now times anything over 4 ms ([Hitch] lines) |
 | 36 | Homer capsules jitter between physics steps | built: drawn interpolated between steps, like the mesh |
 | 37 | Portal rims look like the October debug rings | built: Playroom rims (burning band, tongues, glow, grows open with a flash); "Playroom portal rims" in the Portals tab. Drawn over the screen: a wall in front doesn't hide them yet |
+| 38 | NPC bodies take 0.9-2.6 s to make (big hitch); portal cameras 2.1 s at level start | measuring: the SDK makes a body in 0.1 ms (timed outside the game), so it's ours or the game's; Attach now logs where its time goes ([Hitch] ...'s body). Bones' log lines never reached PortalGun.log (fixed) |
+| 39 | Ground patches 4-9 ms every frame | built: 25 floor + 16 wall rays a body (was 49 + 32) |
+| 40 | NPC's Hitman mesh glitches over its (correct) Homer body | built (likely): the character was moved to the body after the pose was written against its old place, so the mesh trailed it a frame; moved first now |
+| 41 | Shooting an NPC: Delirium doesn't take over | built: the game still ragdolls it underneath (skipping that crashed) but Delirium keeps the body, shoots the part 47 aims at and drops it dead |
+| 42 | Need an invincible 47 and a never-wanted toggle | built: "47 invincible" and "Never wanted (AI ignores 47)" in the Delirium tab (the SDK Player mod's AI cripple pins) |
+| 43 | 47's Homer twitches worse | measuring: the pass report (which UpdateBones pass is captured) now reaches the log; 47's body is only there to bump NPCs ("47's Homer body" / "Show bodies" hide it) |
