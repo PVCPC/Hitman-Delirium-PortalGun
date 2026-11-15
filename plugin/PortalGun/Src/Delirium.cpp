@@ -1036,9 +1036,13 @@ void Delirium::Follow(Body& b) {
     const size_t s_Rig = b.m_Bones.size();
 
     if (n <= 0 || b.m_RigWorld.size() != s_Rig * 7) {
-        if (b.m_FollowSet || n < 0) {
-            Logger::Info("[Delirium] {}: its ragdoll is gone ({}); Delirium lets it go.", b.m_Name, n < 0 ? "unreadable" : "off");
+        if (n < 0) {
+            Logger::Info("[Delirium] {}: its ragdoll is unreadable; Delirium lets it go.", b.m_Name);
             b.m_FollowGone = true;
+        }
+        else if (b.m_FollowSet) {
+            Logger::Info("[Delirium] {}: the game's ragdoll is off; Delirium keeps driving the body.", b.m_Name);
+            b.m_FollowSet = nullptr;
         }
 
         return;
@@ -1482,7 +1486,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     // On its animation exactly until hit or killed (GTA IV's way); a free half-ragdoll walking it sent them flying.
     // Keyframed parts can't move, so a keyframed NPC stays out of the other bodies' contacts until it ragdolls.
     nm_agent_keyframe(b.m_Agent, "fb", 1);
-    nm_agent_collide_agents(b.m_Agent, p_Npc ? 0 : 1);
+    nm_agent_collide_agents(b.m_Agent, 0); // keyframed = infinite mass: 47's launched ragdolled NPCs (pushes below instead)
 
     Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Base == m_Wilma ? "Wilma" : "Homer", n,
         s_N);
@@ -1554,10 +1558,34 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
         const SMatrix s_M = b->m_Spatial->GetObjectToWorldMatrix();
         b->m_HeldZ = s_M.Trans.z;
         b->m_HeldRot = s_M;
+
+        // Billy: knocked down mid walk cycle, the game's AI walked the NPC on without its body. The game's own ragdoll
+        // stops it; its bodies then follow NM's (Follow), as a kill's do. Off again at the get-up.
+        if (b->m_Npc && !b->m_Follow && Functions::ZHM5BaseCharacter_ActivateRagdoll) {
+            Functions::ZHM5BaseCharacter_ActivateRagdoll->Call(b->m_Char, true);
+            b->m_Follow = true;
+            b->m_FollowSet = nullptr;
+        }
     }
     else {
         // Back on his animation from where it is now, blended from the ragdoll's last pose (the get-up).
         Bones::Override(b->m_Anim, {});
+
+        // The game's ragdoll (made at the knock-down) off: its bodies let go, then the game's own deactivate.
+        if (b->m_Npc && b->m_Follow && !b->m_Dead) {
+            void* s_Bodies[c_MaxRagdollBodies];
+            int s_Bones[c_MaxRagdollBodies];
+            void* s_Set = nullptr;
+
+            for (int i = 0, n = ReadRagdoll(b->m_Char, &s_Set, s_Bodies, s_Bones); i < n; ++i)
+                SetKinematic(s_Bodies[i], false);
+
+            if (Functions::ZHM5BaseCharacter_DeactivateRagdoll)
+                Functions::ZHM5BaseCharacter_DeactivateRagdoll->Call(b->m_Char);
+
+            b->m_Follow = false;
+            b->m_FollowSet = nullptr;
+        }
 
         if (b->m_Npc) {
             float s_Pos[3], s_Rot[4];
@@ -1589,7 +1617,7 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
             nm_rig_take(b->m_Rig, b->m_Agent, b->m_Now.data(), nullptr, 0.f);
 
         nm_agent_keyframe(b->m_Agent, "fb", 1);
-        nm_agent_collide_agents(b->m_Agent, b->m_Npc ? 0 : 1);
+        nm_agent_collide_agents(b->m_Agent, 0);
     }
 
     Logger::Info("[Delirium] {} ragdoll {}.", b->m_Name, p_On ? "on" : "off");
@@ -1751,7 +1779,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             b.m_Follow = true;
             b.m_RigAtKill = b.m_RigWorld; // last frame's: what the mesh showed as the ragdoll was made
 
-            if (!b.m_Dead) {
+            if (!b.m_Dead && static_cast<ZActor*>(b.m_Char)->IsDead()) {
                 b.m_Dead = true;
                 SetRagdoll(b, true);
 
@@ -1942,6 +1970,19 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         m_HadHitmanHips = true;
 
         for (Body& b : m_Bodies) {
+            if (b.m_Npc && b.m_Ragdoll && s_Vel.Length() > 0.6f) {
+                float p[3], q[4];
+                nm_agent_get_part_transform(b.m_Agent, 0, p, q);
+                SVector3 s_D = V(p) - s_Hips;
+                s_D.z = 0.f;
+
+                if (s_D.Length() < 0.6f && std::abs(p[2] - (s_Hips.z - 0.9f)) < 0.6f && s_Vel.Dot(s_D) > 0.f) {
+                    const SVector3 s_Push = s_Vel.Normalized() * 3.f; // N s a frame: ~1 m/s on a lying body
+                    const float s_F[3] = {s_Push.x, s_Push.y, 0.f};
+                    nm_agent_apply_push(b.m_Agent, p, s_F);
+                }
+            }
+
             if (!b.m_Npc || b.m_Ragdoll || b.m_Now.size() < 3)
                 continue;
 
@@ -2124,8 +2165,8 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     for (Body& b : m_Bodies) {
         // Ragdolling: the character goes where its body goes (no walking off out of it), then the pose onto it.
         if (b.m_Ragdoll) {
-            // Followed: the entity is the game's ragdoll's.
-            if (!b.m_Follow) {
+            // Followed: the entity is the game's ragdoll's (while it has one).
+            if (!b.m_Follow || !b.m_FollowSet) {
                 float s_Pos[3], s_Rot[4];
                 nm_agent_get_part_transform(b.m_Agent, 0, s_Pos, s_Rot);
                 SMatrix s_M = b.m_HeldRot;
