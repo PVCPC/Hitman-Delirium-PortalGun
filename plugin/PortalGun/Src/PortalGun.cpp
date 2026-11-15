@@ -536,6 +536,8 @@ void PortalGun::DrawPortalTab() {
         m_RequestClear = true;
 
     ImGui::Checkbox("See-through portals", &m_SeeThrough);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show portal cameras", &m_ShowCameras);
     ImGui::SliderFloat("Volume", &m_Volume, 0.f, 1.f, "%.2f");
 }
 
@@ -2187,9 +2189,11 @@ void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
         SVector3 s_Hit, s_HitNormal;
         const SVector3 s_Near = s_Centre + s_Normal * 0.05f;
 
-        if (RayCast(s_Eye, s_Near, p_Hitman, s_Hit, s_HitNormal) &&
-            (s_Hit - s_Eye).Length() < (s_Near - s_Eye).Length() - 0.1f) {
-            s_View.m_Why = std::format("blocked {:.2f} m short", (s_Near - s_Eye).Length() - (s_Hit - s_Eye).Length());
+        // From the portal out to the eye: what's within 1.5 m of the eye (47 himself, over his shoulder) doesn't count.
+        const float s_Far = (s_Eye - s_Near).Length();
+
+        if (RayCast(s_Near, s_Eye, p_Hitman, s_Hit, s_HitNormal) && (s_Hit - s_Near).Length() < s_Far - 1.5f) {
+            s_View.m_Why = std::format("blocked {:.2f} m from it", (s_Hit - s_Near).Length());
             continue;
         }
 
@@ -2211,6 +2215,23 @@ void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
 
 void PortalGun::DrawViews() {
     std::scoped_lock s_Lock(m_ViewMutex);
+
+    // What each portal camera sees, plainly (is there a picture at all?).
+    if (m_ShowCameras) {
+        ImGui::SetNextWindowSize(ImVec2(340.f, 420.f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Portal cameras", &m_ShowCameras);
+
+        for (int i = 0; i < 2; ++i) {
+            const PortalView& v = m_Views[i];
+            ImGui::Text("%s: %s", i ? "Orange" : "Blue", v.m_Why.c_str());
+
+            if (v.m_Texture && v.m_Texture.m_pInterfaceRef)
+                if (const auto s_Rt = reinterpret_cast<ZRenderDestination*>(v.m_Texture.m_pInterfaceRef->GetRenderDestination()))
+                    SDK()->ImGuiGameRenderTarget(s_Rt, ImVec2(320.f, 180.f));
+        }
+
+        ImGui::End();
+    }
 
     if (!m_Views[0].m_Show && !m_Views[1].m_Show)
         return;

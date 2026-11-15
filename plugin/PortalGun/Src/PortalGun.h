@@ -150,6 +150,7 @@ private:
     PortalView m_Views[2];
     Delirium m_Delirium;
     float m_Volume = 0.3f;
+    bool m_ShowCameras = false;
     bool m_RightWasDown = false;
     void DrawPortalTab();
     TResourcePtr<ZTemplateEntityFactory> m_ViewFactory;

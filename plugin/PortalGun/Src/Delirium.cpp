@@ -622,16 +622,24 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     b.m_Spatial = p_Spatial;
     b.m_Npc = p_Npc;
     b.m_Name = p_Name;
-    b.m_Anim = Bones::Animator(p_Char);
+    // The rig (names, parents) from the morpheme entity; the pose from what draws him (47: his own animator).
+    void* s_Rig = Bones::Animator(p_Char);
+    b.m_Anim = p_Npc ? s_Rig : Bones::HitmanAnimator(static_cast<ZHitman5*>(p_Char));
 
     // Not posed yet (the hook only sees it from its next frame): try again later.
-    std::vector<Bones::SQV> s_Local;
+    std::vector<Bones::SQV> s_Local, s_RigLocal;
 
-    if (!b.m_Anim || !Bones::Read(b.m_Anim, s_Local))
+    if (!b.m_Anim || !s_Rig || !Bones::Read(b.m_Anim, s_Local) || !Bones::Read(s_Rig, s_RigLocal))
         return false;
 
     const int n = static_cast<int>(s_Local.size());
-    b.m_Parents = Bones::Parents(b.m_Anim, n);
+
+    if (s_RigLocal.size() != s_Local.size()) {
+        Logger::Warn("[Delirium] {}: animator has {} bones, morpheme {}.", p_Name, s_Local.size(), s_RigLocal.size());
+        return false;
+    }
+
+    b.m_Parents = Bones::Parents(s_Rig, n);
 
     if (b.m_Parents.empty() || n < 59) {
         Logger::Warn("[Delirium] {}: couldn't read the skeleton ({} bones).", p_Name, n);
@@ -640,7 +648,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
 
     // Its bones by name (Hitman's rig is its own: 233 bones in the suit, 231 in a disguise).
     std::string s_Where;
-    const std::vector<std::string> s_Names = Bones::Names(b.m_Anim, n, s_Where);
+    const std::vector<std::string> s_Names = Bones::Names(s_Rig, n, s_Where);
     static bool s_Dumped = false;
 
     if (!s_Dumped) {
@@ -711,7 +719,7 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         const SMatrix s_M = p_Spatial->GetObjectToWorldMatrix();
         Logger::Info("[Delirium] {}: hips {:.2f} {:.2f} {:.2f}, bones from z {:.2f} to {:.2f}, entity at {:.2f} {:.2f} {:.2f}; "
             "bind pose {}.", p_Name, f[0], f[1], f[2], s_Lo, s_Hi, s_M.Trans.x, s_M.Trans.y, s_M.Trans.z,
-            [&] { std::string w; return Bones::BindPose(b.m_Anim, n, w).empty() ? std::string("not found") : w; }());
+            [&] { std::string w; return Bones::BindPose(s_Rig, n, w).empty() ? std::string("not found") : w; }());
     }
 
     float s_Joints[63];

@@ -3,6 +3,7 @@
 #include <Windows.h>
 
 #include <Glacier/ZHM5BaseCharacter.h>
+#include <Glacier/ZHitman5.h>
 #include <Glacier/ZPhysics.h>
 
 #include <cmath>
@@ -49,8 +50,22 @@ namespace {
     // ponytail: one lock over every character's pose (the hook runs on several workers); per-animator locks if it shows.
     std::mutex g_Mutex;
     std::unordered_map<void*, State> g_States;
-    void** g_Vt = nullptr;
-    UpdateFn g_Orig = nullptr;
+    // The patched vtables (the NPCs' and 47's morpheme entity, 47's own animator) and their UpdateBones.
+    struct Patched {
+        void** m_Vt = nullptr;
+        UpdateFn m_Orig = nullptr;
+    };
+    Patched g_Patched[4];
+
+    UpdateFn OrigOf(void* p_This) {
+        void** s_Vt = *static_cast<void***>(p_This);
+
+        for (const Patched& p : g_Patched)
+            if (p.m_Vt == s_Vt)
+                return p.m_Orig;
+
+        return nullptr;
+    }
 
     // Readable without faulting (the scans below poke at guessed layouts).
     bool Readable(const void* p, size_t n) {
@@ -65,7 +80,7 @@ namespace {
     }
 
     void Hook(void* p_This, const void* p_Data, uint8_t* p_Pose, const void* p_World, void* a5, void* a6, void* a7) {
-        g_Orig(p_This, p_Data, p_Pose, p_World, a5, a6, a7);
+        OrigOf(p_This)(p_This, p_Data, p_Pose, p_World, a5, a6, a7);
 
         if (!p_Pose)
             return;
@@ -110,32 +125,49 @@ namespace {
     }
 }
 
+// Patches its vtable's UpdateBones (once per vtable) and tracks it.
+void* Bones::Track(void* p_Anim) {
+    if (!p_Anim)
+        return nullptr;
+
+    std::scoped_lock s_Lock(g_Mutex);
+    void** s_Vt = *static_cast<void***>(p_Anim);
+    bool s_Known = false;
+
+    for (Patched& p : g_Patched) {
+        if (p.m_Vt == s_Vt) {
+            s_Known = true;
+            break;
+        }
+
+        if (!p.m_Vt) {
+            p.m_Orig = static_cast<UpdateFn>(s_Vt[1]);
+            p.m_Vt = s_Vt;
+            DWORD s_Old;
+            VirtualProtect(&s_Vt[1], sizeof(void*), PAGE_READWRITE, &s_Old);
+            InterlockedExchangePointer(&s_Vt[1], reinterpret_cast<void*>(&Hook));
+            VirtualProtect(&s_Vt[1], sizeof(void*), s_Old, &s_Old);
+            s_Known = true;
+            break;
+        }
+    }
+
+    if (!s_Known)
+        return nullptr;
+
+    g_States.try_emplace(p_Anim);
+    return p_Anim;
+}
+
 void* Bones::Animator(ZHM5BaseCharacter* p_Character) {
     if (!p_Character || !p_Character->m_pMorphemeEntity.m_entityRef)
         return nullptr;
 
-    void* s_Anim = p_Character->m_pMorphemeEntity.m_entityRef.QueryInterface<IBoneAnimator>();
+    return Track(p_Character->m_pMorphemeEntity.m_entityRef.QueryInterface<IBoneAnimator>());
+}
 
-    if (!s_Anim)
-        return nullptr;
-
-    std::scoped_lock s_Lock(g_Mutex);
-
-    if (!g_Vt) {
-        g_Vt = *static_cast<void***>(s_Anim);
-        g_Orig = static_cast<UpdateFn>(g_Vt[1]);
-        DWORD s_Old;
-        VirtualProtect(&g_Vt[1], sizeof(void*), PAGE_READWRITE, &s_Old);
-        InterlockedExchangePointer(&g_Vt[1], reinterpret_cast<void*>(&Hook));
-        VirtualProtect(&g_Vt[1], sizeof(void*), s_Old, &s_Old);
-    }
-
-    // Another class's animator (not the shared vtable): not ours to read.
-    if (*static_cast<void***>(s_Anim) != g_Vt)
-        return nullptr;
-
-    g_States.try_emplace(s_Anim);
-    return s_Anim;
+void* Bones::HitmanAnimator(ZHitman5* p_Hitman) {
+    return p_Hitman && p_Hitman->m_Animator ? Track(p_Hitman->m_Animator.QueryInterface<IBoneAnimator>()) : nullptr;
 }
 
 bool Bones::Read(void* p_Animator, std::vector<SQV>& p_Local) {
@@ -189,14 +221,17 @@ void Bones::Override(void* p_Animator, std::vector<SQV> p_Local) {
 void Bones::Uninstall() {
     std::scoped_lock s_Lock(g_Mutex);
 
-    if (!g_Vt)
-        return;
+    for (Patched& p : g_Patched) {
+        if (!p.m_Vt)
+            continue;
 
-    DWORD s_Old;
-    VirtualProtect(&g_Vt[1], sizeof(void*), PAGE_READWRITE, &s_Old);
-    InterlockedExchangePointer(&g_Vt[1], reinterpret_cast<void*>(g_Orig));
-    VirtualProtect(&g_Vt[1], sizeof(void*), s_Old, &s_Old);
-    g_Vt = nullptr;
+        DWORD s_Old;
+        VirtualProtect(&p.m_Vt[1], sizeof(void*), PAGE_READWRITE, &s_Old);
+        InterlockedExchangePointer(&p.m_Vt[1], reinterpret_cast<void*>(p.m_Orig));
+        VirtualProtect(&p.m_Vt[1], sizeof(void*), s_Old, &s_Old);
+        p = {};
+    }
+
     g_States.clear();
 }
 

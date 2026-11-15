@@ -8,6 +8,7 @@
 #include <vector>
 
 class ZHM5BaseCharacter;
+class ZHitman5;
 
 namespace Bones {
     struct SQV {
@@ -17,6 +18,12 @@ namespace Bones {
 
     // The character's IBoneAnimator (its key here); patches the vtable the first time. Null if it has none.
     void* Animator(ZHM5BaseCharacter* p_Character);
+
+    // 47's own animator (ZHM5Animator): his drawn pose is its output, not his morpheme entity's.
+    void* HitmanAnimator(ZHitman5* p_Hitman);
+
+    // Hooks and tracks any IBoneAnimator (null if four vtables are patched already).
+    void* Track(void* p_Anim);
 
     // Its last animated pose (before any override), false before the game has posed it.
     bool Read(void* p_Animator, std::vector<SQV>& p_Local);
