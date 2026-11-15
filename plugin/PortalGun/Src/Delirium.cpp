@@ -173,6 +173,8 @@ namespace {
 
     std::unordered_set<void*> g_GameTook; // NPCs the game ragdolled itself (Delirium lets them go)
 
+    void ClearHeld();
+
     bool GameRagdolls(void* c) {
         std::scoped_lock s_Lock(g_OwnedMutex);
 
@@ -460,10 +462,7 @@ void Delirium::Clear() {
     m_Walls.clear();
     m_PatchAt.clear();
     m_HitmanTouches = false;
-    {
-        std::scoped_lock s_Held(g_HeldMutex);
-        g_Held.clear();
-    }
+    ClearHeld();
     std::scoped_lock s_Lock(m_Mutex);
     m_Pose.clear();
     m_Names.clear();
@@ -1142,6 +1141,11 @@ namespace {
             VirtualProtect(s_Slot, sizeof(void*), s_Old, &s_Old);
             Logger::Info("[Delirium] The game's SetKinematic on NM's ragdoll bodies is held.");
         }
+    }
+
+    void ClearHeld() {
+        std::scoped_lock s_Lock(g_HeldMutex);
+        g_Held.clear();
     }
 
     void Hold(void* p, bool p_On) {
