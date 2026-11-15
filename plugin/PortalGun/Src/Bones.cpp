@@ -51,7 +51,7 @@ namespace {
         c->Dr6 = 0;
         const int s_Mode = g_WatchMode.load();
 
-        if ((s_Mode == 1 || s_Mode == 2) && !t_InHook) {
+        if ((s_Mode == 1 || s_Mode == 2) && (!t_InHook || !g_WatchAnim.load())) {
             bool s_Seen = false;
             const int n = std::min(g_HitCount.load(), 16);
 
@@ -364,19 +364,40 @@ void Bones::Tick() {
     }
 }
 
+namespace {
+    void StartWatch();
+}
+
 void Bones::Watch(void* p_Animator, int p_Bone) {
     static std::atomic<bool> s_Once {false};
 
     if (!p_Animator || p_Bone < 0 || s_Once.exchange(true))
         return;
 
+    g_WatchBone = p_Bone;
+    g_WatchAnim = p_Animator;
+    Logger::Info("[Bones] watch: bone {} of {} (Pelican: who overwrites our pose).", p_Bone, p_Animator);
+    StartWatch();
+}
+
+void Bones::WatchAt(uintptr_t p_Addr) {
+    static std::atomic<bool> s_Once {false};
+
+    if (!p_Addr || (p_Addr & 7) || s_Once.exchange(true))
+        return;
+
+    g_WatchAnim = nullptr;
+    g_WatchAddr = p_Addr;
+    Logger::Info("[Bones] watch: address {:x} (the skin's pose?).", p_Addr);
+    StartWatch();
+}
+
+namespace {
+    void StartWatch() {
     g_Exe = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     const auto* s_Dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(g_Exe);
     g_ExeEnd = g_Exe + reinterpret_cast<const IMAGE_NT_HEADERS64*>(g_Exe + s_Dos->e_lfanew)->OptionalHeader.SizeOfImage;
-    g_WatchBone = p_Bone;
-    g_WatchAnim = p_Animator;
     g_Veh = AddVectoredExceptionHandler(1, WatchVeh);
-    Logger::Info("[Bones] watch: bone {} of {} (Pelican: who overwrites our pose).", p_Bone, p_Animator);
 
     std::thread([] {
         // Writes for 5 s; nothing then: reads and writes for 3 s (the skinning may not read this buffer at all).
@@ -396,6 +417,7 @@ void Bones::Watch(void* p_Animator, int p_Bone) {
         ArmAll(0, 3);
         Logger::Info("[Bones] watch: done, {} places.", s_Hits);
     }).detach();
+}
 }
 
 bool Bones::Read(void* p_Animator, std::vector<SQV>& p_Local) {

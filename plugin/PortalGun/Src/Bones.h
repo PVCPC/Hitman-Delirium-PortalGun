@@ -50,6 +50,8 @@ namespace Bones {
     // Once per run (Pelican): a hardware watch on this animator's bone `p_Bone` translation, right after our Override:
     // who in Hitman writes it next (5 s), else who reads it (3 s). Logged from Tick, then disarmed.
     void Watch(void* p_Animator, int p_Bone);
+    // The same watch on one address (the skin's copy of the ragdoll's pose, found by Delirium's scan).
+    void WatchAt(uintptr_t p_Addr);
 
     // Puts the vtable back (unloading).
     void Uninstall();

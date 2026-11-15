@@ -1069,6 +1069,37 @@ namespace {
         }
     }
 
+    // Pelican: the skin's pose isn't our bone buffer (nothing writes it after our Override; the ragdoll reads it).
+    // Where is it: memory off the character, its animated actor and its animator (and one pointer further) holding
+    // this NPC's hips position in world space. Raw reads under __try: no C++ objects in here.
+    int FindNear(uintptr_t p_Root, size_t p_Len, const float* p_At, float p_Tol, int p_Depth, uintptr_t* p_Out,
+        uintptr_t* p_Via, int p_Have, int p_Max) {
+        MEMORY_BASIC_INFORMATION m;
+
+        if (p_Have >= p_Max || p_Root < 0x10000 || p_Root > 0x7fffffffffffull || (p_Root & 7) ||
+            !VirtualQuery(reinterpret_cast<void*>(p_Root), &m, sizeof(m)) || m.State != MEM_COMMIT ||
+            (m.Protect & (PAGE_GUARD | PAGE_NOACCESS)) || !(m.Protect & (PAGE_READWRITE | PAGE_READONLY)))
+            return p_Have;
+
+        const size_t s_Len = std::min<size_t>(p_Len, reinterpret_cast<uintptr_t>(m.BaseAddress) + m.RegionSize - p_Root);
+
+        __try {
+            const float* f = reinterpret_cast<const float*>(p_Root);
+
+            for (size_t k = 0; k + 3 <= s_Len / 4 && p_Have < p_Max; ++k)
+                if (std::abs(f[k] - p_At[0]) < p_Tol && std::abs(f[k + 1] - p_At[1]) < p_Tol && std::abs(f[k + 2] - p_At[2]) < p_Tol)
+                    p_Via[p_Have] = p_Root, p_Out[p_Have++] = p_Root + k * 4;
+
+            if (p_Depth > 0)
+                for (size_t k = 0; k < s_Len / 8 && p_Have < p_Max; ++k)
+                    p_Have = FindNear(reinterpret_cast<const uintptr_t*>(p_Root)[k], 0x2000, p_At, p_Tol, p_Depth - 1, p_Out,
+                        p_Via, p_Have, p_Max);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {}
+
+        return p_Have;
+    }
+
     // Hitman's own ragdoll recovery (HITMAN3+0x3b82f0, called with ZActor::m_pAnimatedActor by the unconscious and
     // knocked-down behaviours): powered ragdoll, picks Impacts|*_GetUp_Back/Stomake/LeftSide/RightSide from the
     // ragdoll's lie, plays it, ends at its eDE_RecoveryBlendEnd. Checked by its first bytes; false = not this build.
@@ -1237,9 +1268,43 @@ void Delirium::Follow(Body& b) {
         Logger::Info("[Delirium] {}: following its ragdoll's {} bodies ({}, offsets {}): {}", b.m_Name, n, ClassOf(s_Bodies[0]),
             s_AtKill ? "from the kill frame" : "from now", s_Log);
 
-        // Pelican: catch what in Hitman draws its ragdoll's pose over ours (the hips, once a run).
-        if (b.m_PoseHips >= 0 && b.m_PoseHips < static_cast<int>(b.m_Bones.size()))
-            Bones::Watch(b.m_Anim, b.m_Bones[b.m_PoseHips]);
+    }
+
+    // Once a run, half a second into a followed ragdoll: the skin's hips (the game ragdoll's pelvis body, which Follow
+    // keeps on our hips) in memory near the character; the first place found is watched for who writes it.
+    static int s_ScanIn = 30;
+
+    if (s_ScanIn > 0 && --s_ScanIn == 0) {
+        for (int i = 0; i < n; ++i) {
+            if (b.m_FollowRig[i] != b.m_PoseHips)
+                continue;
+
+            const SMatrix s_M = static_cast<IPhysicsObject*>(s_Bodies[i])->GetTransform();
+            const float s_At[3] = {s_M.Trans.x, s_M.Trans.y, s_M.Trans.z};
+            uintptr_t s_Found[24] = {}, s_Via[24] = {};
+            const uintptr_t s_Anim = reinterpret_cast<uintptr_t>(static_cast<ZActor*>(b.m_Char)->m_pAnimatedActor);
+            int k = FindNear(reinterpret_cast<uintptr_t>(b.m_Char), 0x1400, s_At, 0.03f, 1, s_Found, s_Via, 0, 24);
+            k = FindNear(s_Anim, 0x1000, s_At, 0.03f, 2, s_Found, s_Via, k, 24);
+            k = FindNear(reinterpret_cast<uintptr_t>(b.m_Anim), 0x1000, s_At, 0.03f, 1, s_Found, s_Via, k, 24);
+            std::string s_List;
+
+            for (int j = 0; j < k; ++j) {
+                const float* f = reinterpret_cast<const float*>(s_Found[j]);
+                s_List += std::format("{:x} (in {:x}: {:.3f} {:.3f} {:.3f}); ", s_Found[j], s_Via[j], f[0], f[1], f[2]);
+            }
+
+            Logger::Info("[Delirium] {}: the skin's hips? pelvis body at {:.3f} {:.3f} {:.3f}; char {}, animated actor {:x}, "
+                "animator {}; {} places: {}", b.m_Name, s_At[0], s_At[1], s_At[2], static_cast<void*>(b.m_Char), s_Anim, static_cast<void*>(b.m_Anim), k, s_List);
+
+            // Not the character's own entity matrix (the root moves with the body too): the first in another object.
+            for (int j = 0; j < k; ++j)
+                if (s_Via[j] != reinterpret_cast<uintptr_t>(b.m_Char) && s_Via[j] != reinterpret_cast<uintptr_t>(b.m_Spatial)) {
+                    Bones::WatchAt(s_Found[j] & ~7ull);
+                    break;
+                }
+
+            break;
+        }
     }
 
     int s_Lost = 0;
@@ -1527,50 +1592,8 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     // exactly on its bone, no length fight (shaking) or baked-in pelvis height (floating). REAL: one world, scale 1.
     NmBuild* s_Base = p_Female && m_Wilma ? m_Wilma : m_Build;
     s_Lap("check");
-    // Hitman has three spine bones, Homer four spine parts (spine>7 spine1>8 spine2>9, part 10 none): the fit made
-    // his two lower spine parts long and fat (radius 0.12 > 0.20, Billy's huge belly) and the upper two tiny. Spine
-    // joints 8-10 go where Homer has them along this man's own spine (pelvis-side joint 7 to the neck's, 11), so
-    // every spine part keeps Homer's share of its length and so his thickness.
-    {
-        float s_C[5][3], s_Q[4];
-
-        for (int k = 0; k < 5; ++k)
-            nm_build_part_frame(s_Base, 7 + k, s_C[k], s_Q);
-
-        float s_Homer[5] = {0.f};
-
-        for (int k = 1; k < 5; ++k)
-            s_Homer[k] = s_Homer[k - 1] + (V(s_C[k]) - V(s_C[k - 1])).Length();
-
-        // This man's spine as a line through his own joints 7, 8, 9, 11 (10 is made up), by length along it.
-        const SVector3 s_P[4] = {V(&s_Joints[7 * 3]), V(&s_Joints[8 * 3]), V(&s_Joints[9 * 3]), V(&s_Joints[11 * 3])};
-        float s_Len[4] = {0.f};
-
-        for (int k = 1; k < 4; ++k)
-            s_Len[k] = s_Len[k - 1] + (s_P[k] - s_P[k - 1]).Length();
-
-        if (s_Homer[4] > 0.05f && s_Len[3] > 0.05f) {
-            SVector3 s_New[3];
-
-            for (int k = 1; k <= 3; ++k) {
-                const float d = s_Len[3] * s_Homer[k] / s_Homer[4];
-                int e = 1;
-
-                while (e < 3 && s_Len[e] < d)
-                    ++e;
-
-                const float t = std::clamp((d - s_Len[e - 1]) / std::max(1e-4f, s_Len[e] - s_Len[e - 1]), 0.f, 1.f);
-                s_New[k - 1] = s_P[e - 1] + (s_P[e] - s_P[e - 1]) * t;
-            }
-
-            for (int k = 0; k < 3; ++k) {
-                s_Joints[(8 + k) * 3] = s_New[k].x;
-                s_Joints[(8 + k) * 3 + 1] = s_New[k].y;
-                s_Joints[(8 + k) * 3 + 2] = s_New[k].z;
-            }
-        }
-    }
-
+    // A short spine (Hitman: 3 bones for Homer's 4 parts) is spread by Fred's own joint shares in nm_rig_joints
+    // (delirium 04b8d40fe); evenly, it made his lower spine parts long and fat (Billy's huge belly).
     // Homer as the Playroom has him (every Custom slider 1, Pelican): width 0.65 thinned his arms and shoulders too.
     b.m_Build = nm_build_fit_sized(s_Base, s_Joints, NM_SIZE_REAL);
 
