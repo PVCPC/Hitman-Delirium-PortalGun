@@ -58,8 +58,12 @@ fn max_slide(half: Vec2) -> f32 {
 
 /// Is there a surface right behind `p` on the plane of `n`? Traces `p + n` to `p - n` and wants a face
 /// facing `n` at one unit.
+/// Hitman's surfaces are bumpy (bricks, siding, uneven collision): within `SLACK` of the plane and 37 degrees of
+/// its facing counts (Portal 2 wants half a unit and 11 degrees).
+const SLACK: f32 = 4.0 * U;
+
 fn surface_at(w: &dyn World, p: Vec3, n: Vec3) -> bool {
-    w.ray(p + n * U, -n, 2.0 * U).is_some_and(|h| h.distance > 0.0 && (h.distance - U).abs() < 0.5 * U && h.normal.dot(n) > 0.98)
+    w.ray(p + n * SLACK, -n, 2.0 * SLACK).is_some_and(|h| h.distance > 0.0 && (h.distance - SLACK).abs() < SLACK && h.normal.dot(n) > 0.8)
 }
 
 /// The nearest thing sticking out of the surface between `from` and `to` (traced one unit in front of it,
@@ -70,7 +74,7 @@ fn obstruction(w: &dyn World, from: Vec3, to: Vec3, n: Vec3) -> Option<f32> {
     if len <= 0.0 {
         return None;
     }
-    w.ray(from + n * U, d / len, len).map(|h| h.distance)
+    w.ray(from + n * SLACK, d / len, len).map(|h| h.distance)
 }
 
 /// Distance from `from` toward `to` at which the usable surface stops: an obstruction, or the surface

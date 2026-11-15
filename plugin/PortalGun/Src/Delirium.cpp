@@ -55,6 +55,22 @@ namespace {
 
     Q Conj(const Q& a) { return {-a.x, -a.y, -a.z, a.w}; }
 
+    // The shortest turn taking direction a onto direction b.
+    Q Between(SVector3 a, SVector3 b) {
+        a = a.Normalized();
+        b = b.Normalized();
+        const SVector3 c = a.Cross(b);
+        const float d = a.Dot(b);
+
+        if (d < -0.9999f) {
+            const SVector3 s_Axis = (std::abs(a.x) < 0.9f ? a.Cross(SVector3(1.f, 0.f, 0.f)) : a.Cross(SVector3(0.f, 1.f, 0.f))).Normalized();
+            return {s_Axis.x, s_Axis.y, s_Axis.z, 0.f};
+        }
+
+        const float l = std::sqrt(c.x * c.x + c.y * c.y + c.z * c.z + (1.f + d) * (1.f + d));
+        return {c.x / l, c.y / l, c.z / l, (1.f + d) / l};
+    }
+
     Q Norm(const Q& a) {
         const float l = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
         return l > 1e-6f ? Q {a.x / l, a.y / l, a.z / l, a.w / l} : Q {0.f, 0.f, 0.f, 1.f};
@@ -756,7 +772,60 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
 
     const float s_At[3] = {s_Hips.x, s_Hips.y, s_Floor};
     b.m_Agent = nm_agent_create(s_Build, s_At, s_Yaw, 0.37f);
-    b.m_Rig = b.m_Agent ? nm_rig_create(b.m_Agent, s_N, s_RigParents.data(), b.m_Now.data(), s_Map.data()) : nullptr;
+
+    // The rest pose must be the agent's own (it stands straight, arms down): bend each limb of the skeleton's pose now
+    // onto the agent's, segment by segment from the hips out, or the walk's bent knee is baked in and it contorts.
+    std::vector<float> s_Rest = b.m_Now;
+
+    if (b.m_Agent) {
+        const auto s_Under = [&](int k, int r) {
+            for (; k >= 0; k = s_RigParents[k])
+                if (k == r)
+                    return true;
+
+            return false;
+        };
+
+        for (int r = 1; r < s_N; ++r) {
+            if (s_Map[r] <= 0)
+                continue;
+
+            // The segment: this bone to its first descendant on another part (thigh to calf, upper arm to forearm).
+            int d = -1;
+
+            for (int k = r + 1; k < s_N && d < 0; ++k)
+                if (s_Map[k] >= 0 && s_Map[k] != s_Map[r] && s_Under(k, r))
+                    d = k;
+
+            if (d < 0)
+                continue;
+
+            float s_A[3], s_B[3], s_Q[4];
+            nm_agent_get_part_transform(b.m_Agent, s_Map[r], s_A, s_Q);
+            nm_agent_get_part_transform(b.m_Agent, s_Map[d], s_B, s_Q);
+            const SVector3 s_From = V(&s_Rest[r * 7]);
+            const SVector3 s_Skel = V(&s_Rest[d * 7]) - s_From;
+            const SVector3 s_Want = V(s_B) - V(s_A);
+
+            if (s_Skel.Length() < 0.03f || s_Want.Length() < 0.03f)
+                continue;
+
+            const Q s_Turn = Between(s_Skel, s_Want);
+
+            for (int k = r; k < s_N; ++k) {
+                if (!s_Under(k, r))
+                    continue;
+
+                float* f = &s_Rest[k * 7];
+                const SVector3 s_P = s_From + Rot(s_Turn, V(f) - s_From);
+                const Q s_R = Norm(Mul(s_Turn, Q {f[3], f[4], f[5], f[6]}));
+                f[0] = s_P.x, f[1] = s_P.y, f[2] = s_P.z;
+                f[3] = s_R.x, f[4] = s_R.y, f[5] = s_R.z, f[6] = s_R.w;
+            }
+        }
+    }
+
+    b.m_Rig = b.m_Agent ? nm_rig_create(b.m_Agent, s_N, s_RigParents.data(), s_Rest.data(), s_Map.data()) : nullptr;
 
     if (!b.m_Rig) {
         Logger::Warn("[Delirium] {}: {}", p_Name, LastError());
