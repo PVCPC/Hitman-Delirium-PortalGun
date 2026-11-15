@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.15)
+
+file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS Src/*.cpp Src/*.h)
+
+add_library(PortalGun SHARED ${SRC_FILES})
+target_include_directories(PortalGun PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Src)
+target_link_libraries(PortalGun PRIVATE ZHMModSDK)
+
+
+# Delirium's portal code (Rust): built with cargo, linked in statically.
+set(PORTAL_CORE ${CMAKE_CURRENT_SOURCE_DIR}/../../portal-core)
+set(PORTAL_CORE_LIB ${PORTAL_CORE}/target/release/delirium_portal.lib)
+add_custom_target(portal_core COMMAND cargo build --release WORKING_DIRECTORY ${PORTAL_CORE} BYPRODUCTS ${PORTAL_CORE_LIB} USES_TERMINAL)
+add_dependencies(PortalGun portal_core)
+target_include_directories(PortalGun PRIVATE ${PORTAL_CORE}/include)
+target_link_libraries(PortalGun PRIVATE ${PORTAL_CORE_LIB} ws2_32 userenv ntdll bcrypt)

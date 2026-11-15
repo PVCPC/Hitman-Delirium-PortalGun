@@ -1,0 +1,15 @@
+[package]
+name = "delirium-portal"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Delirium's Portal 2 portal code (pair maths, placement rules, funnel, game finding, VPK reading) behind a C ABI"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+glam = "0.30"
+
+[profile.release]
+panic = "abort"

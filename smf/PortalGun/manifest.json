@@ -1,0 +1,18 @@
+{
+    "version": "0.1.0",
+    "id": "Billy.PortalGun",
+    "name": "Portal Gun",
+    "description": "Aperture Science Handheld Portal Device. Personal use only.",
+    "authors": [
+        "billy"
+    ],
+    "frameworkVersion": "2.33.42",
+    "contentFolders": [
+        "content"
+    ],
+    "localisation": {
+        "english": {
+            "UI_PORTALGUN_NAME": "Portal Gun"
+        }
+    }
+}
