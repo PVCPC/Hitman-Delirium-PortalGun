@@ -2,11 +2,16 @@
 
 #include <Windows.h>
 #include "Hooks.h"
+#include <Glacier/ZActor.h>
+#include <Glacier/ZOutfit.h>
+#include <Glacier/ZSpatialEntity.h>
+#include <Globals.h>
 
 #include "PortalLog.h"
 #define Logger PortalLog
 
 #include "IRenderer.h"
+
 
 #include <imgui.h>
 #include <Windows.h>
@@ -23,6 +28,8 @@ namespace {
     constexpr int c_Parts = 21;
     constexpr int c_MaxPeds = 8;
     constexpr int c_Chest = 10;
+    constexpr int c_MaxNpcs = 6;
+    constexpr int c_MaxMeshes = 32;
 
     SVector3 V(const float* p) { return SVector3(p[0], p[1], p[2]); }
 
@@ -32,6 +39,90 @@ namespace {
         const float w = q[3];
         const SVector3 t = u.Cross(v) * 2.f;
         return v + t * w + u.Cross(t);
+    }
+
+    struct Q {
+        float x, y, z, w;
+    };
+
+    Q Mul(const Q& a, const Q& b) {
+        return {a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+    }
+
+    Q Conj(const Q& a) { return {-a.x, -a.y, -a.z, a.w}; }
+
+    Q Norm(const Q& a) {
+        const float l = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
+        return l > 1e-6f ? Q {a.x / l, a.y / l, a.z / l, a.w / l} : Q {0.f, 0.f, 0.f, 1.f};
+    }
+
+    SVector3 Rot(const Q& q, const SVector3& v) {
+        const float f[4] = {q.x, q.y, q.z, q.w};
+        return Rotate(f, v);
+    }
+
+    // The turn of a matrix whose rows are its X, Y and Z axes (a point goes to x X + y Y + z Z + T).
+    Q FromAxes(const float4& p_X, const float4& p_Y, const float4& p_Z) {
+        const SVector3 x = SVector3(p_X.x, p_X.y, p_X.z).Normalized();
+        const SVector3 y = SVector3(p_Y.x, p_Y.y, p_Y.z).Normalized();
+        const SVector3 z = SVector3(p_Z.x, p_Z.y, p_Z.z).Normalized();
+        // m[r][c]: column c is axis c.
+        const float m00 = x.x, m10 = x.y, m20 = x.z, m01 = y.x, m11 = y.y, m21 = y.z, m02 = z.x, m12 = z.y, m22 = z.z;
+        const float t = m00 + m11 + m22;
+        Q q;
+
+        if (t > 0.f) {
+            const float s = std::sqrt(t + 1.f) * 2.f;
+            q = {(m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, 0.25f * s};
+        }
+        else if (m00 > m11 && m00 > m22) {
+            const float s = std::sqrt(1.f + m00 - m11 - m22) * 2.f;
+            q = {0.25f * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s};
+        }
+        else if (m11 > m22) {
+            const float s = std::sqrt(1.f + m11 - m00 - m22) * 2.f;
+            q = {(m01 + m10) / s, 0.25f * s, (m12 + m21) / s, (m02 - m20) / s};
+        }
+        else {
+            const float s = std::sqrt(1.f + m22 - m00 - m11) * 2.f;
+            q = {(m02 + m20) / s, (m12 + m21) / s, 0.25f * s, (m10 - m01) / s};
+        }
+
+        return Norm(q);
+    }
+
+    // Hitman's bone (BoneId_Enum, its standard Biped rig) to NM's part, -1 for none.
+    // ponytail: by index, as the SDK's bone ids are; by name if an outfit's rig ever has them in another order.
+    int PartOf(int b) {
+        switch (b) {
+            case 1: return 0;   // pelvis
+            case 8: return 1;   // left thigh, calf, foot
+            case 12: return 2;
+            case 13: return 3;
+            case 16: return 4;  // right thigh, calf, foot
+            case 20: return 5;
+            case 21: return 6;
+            case 2: return 7;   // spine, spine 1, spine 2
+            case 3: return 8;
+            case 4: return 9;
+            case 5: return 11;  // neck
+            case 7: return 12;  // head
+            case 24: return 13; // left clavicle, upper arm, forearm, hand
+            case 25: return 14;
+            case 29: return 15;
+            case 33: return 16;
+            case 49: return 17; // right clavicle, upper arm, forearm, hand
+            case 50: return 18;
+            case 54: return 19;
+            case 58: return 20;
+            default: return -1;
+        }
+    }
+
+    float Facing(const SVector3& p_Left, const SVector3& p_Right) {
+        const SVector3 r = p_Right - p_Left;
+        return std::atan2(r.x, -r.y); // forward = up x right
     }
 
     std::string LastError() {
@@ -98,6 +189,11 @@ bool Delirium::Start() {
         return false;
     }
 
+    // Wilma too, for the women (her export in mods/Delirium/wilma).
+    const auto s_Wilma = std::filesystem::path(m_Gta4) / "pc/data/naturalmotion/Wilma.art";
+    const bool s_HaveWilma = std::filesystem::exists(m_Dir / "wilma/build.txt") && std::filesystem::exists(s_Wilma) &&
+        nm_init_wilma(s_Wilma.string().c_str()) >= 0;
+
     if (std::filesystem::exists(m_Dir / "taskparams.txt"))
         nm_load_task_params((m_Dir / "taskparams.txt").string().c_str());
 
@@ -107,6 +203,9 @@ bool Delirium::Start() {
         m_Status = "No build.txt: export it once with Delirium (delirium-room --game <GTA IV> --export <mods/Delirium>).";
         return false;
     }
+
+    if (s_HaveWilma)
+        m_Wilma = nm_build_load((m_Dir / "wilma/build.txt").string().c_str());
 
     nm_set_step_limit(0);
     m_World = nm_world_create();
@@ -126,7 +225,8 @@ bool Delirium::Start() {
     }
 
     m_Ready = true;
-    m_Status = std::format("Ready (gta4nm {}, {} behaviours).", nm_version(), m_Messages.size());
+    m_Status = std::format("Ready (gta4nm {}, {} behaviours, {}).", nm_version(), m_Messages.size(),
+        m_Wilma ? "Fred and Wilma" : "Fred only");
     Logger::Info("[Delirium] {}", m_Status);
     return true;
 }
@@ -135,13 +235,20 @@ void Delirium::Clear() {
     for (Ped& s_Ped : m_Peds)
         nm_agent_destroy(s_Ped.m_Agent);
 
+    for (Body& s_Body : m_Bodies)
+        Detach(s_Body);
+
+    m_Bodies.clear();
+    m_HitmanRagdoll = false;
+
     if (m_World)
-        for (int i = 0; i < c_MaxPeds; ++i)
+        for (int i = 0; i < c_MaxMeshes; ++i)
             nm_world_set_mesh(m_World, i, nullptr, 0, nullptr, 0, nullptr);
 
     m_Peds.clear();
     std::scoped_lock s_Lock(m_Mutex);
     m_Pose.clear();
+    m_Names.clear();
     m_Target = 0;
 }
 
@@ -185,9 +292,17 @@ void Delirium::UpdateGround(const Ray& p_Ray) {
     constexpr int c_N = 7;
     constexpr float c_Spacing = 0.5f;
 
-    for (size_t p = 0; p < m_Peds.size(); ++p) {
+    std::vector<NmAgent*> s_Agents;
+
+    for (const Ped& s_Ped : m_Peds)
+        s_Agents.push_back(s_Ped.m_Agent);
+
+    for (const Body& s_Body : m_Bodies)
+        s_Agents.push_back(s_Body.m_Agent);
+
+    for (size_t p = 0; p < s_Agents.size() && p < c_MaxMeshes; ++p) {
         float s_Pos[3], s_Rot[4];
-        nm_agent_get_part_transform(m_Peds[p].m_Agent, 0, s_Pos, s_Rot);
+        nm_agent_get_part_transform(s_Agents[p], 0, s_Pos, s_Rot);
 
         std::vector<float> s_Verts;
         std::vector<uint32_t> s_Tris;
@@ -218,22 +333,56 @@ void Delirium::UpdateGround(const Ray& p_Ray) {
     }
 }
 
-int Delirium::Aimed() const {
+NmAgent* Delirium::Target(int t, std::string*& p_Name, float*& p_Health, Body*& p_Body) {
+    p_Body = nullptr;
+
+    if (t == 0) {
+        p_Body = Hitman();
+    }
+    else if (t - 1 < static_cast<int>(m_Peds.size())) {
+        Ped& s_Ped = m_Peds[t - 1];
+        p_Name = &s_Ped.m_Name;
+        p_Health = &s_Ped.m_Health;
+        return s_Ped.m_Agent;
+    }
+    else {
+        int k = t - 1 - static_cast<int>(m_Peds.size());
+
+        for (Body& s_Body : m_Bodies)
+            if (s_Body.m_Npc && k-- == 0)
+                p_Body = &s_Body;
+    }
+
+    if (!p_Body)
+        return nullptr;
+
+    p_Name = &p_Body->m_Name;
+    p_Health = &p_Body->m_Health;
+    return p_Body->m_Agent;
+}
+
+int Delirium::Aimed() {
     int s_Best = -1;
     float s_BestDist = 1e9f;
     const float s_From[3] = {m_Eye.x, m_Eye.y, m_Eye.z};
     const SVector3 s_End = m_Eye + m_Aim * 100.f;
     const float s_To[3] = {s_End.x, s_End.y, s_End.z};
+    const int s_Count = 1 + static_cast<int>(m_Peds.size() + m_Bodies.size());
 
-    for (size_t i = 0; i < m_Peds.size(); ++i) {
+    // Not 47 (target 0) from his own camera.
+    for (int t = 1; t < s_Count; ++t) {
+        std::string* s_Name;
+        float* s_Health;
+        Body* s_Body;
+        NmAgent* a = Target(t, s_Name, s_Health, s_Body);
         float s_Point[3], s_Normal[3];
 
-        if (nm_agent_raycast(m_Peds[i].m_Agent, s_From, s_To, s_Point, s_Normal) >= 0) {
+        if (a && nm_agent_raycast(a, s_From, s_To, s_Point, s_Normal) >= 0) {
             const float s_D = (V(s_Point) - m_Eye).Length();
 
             if (s_D < s_BestDist) {
                 s_BestDist = s_D;
-                s_Best = static_cast<int>(i);
+                s_Best = t;
             }
         }
     }
@@ -241,12 +390,7 @@ int Delirium::Aimed() const {
     return s_Best;
 }
 
-void Delirium::Fire(int p_Ped, const std::string& p_What) {
-    if (p_Ped < 0 || p_Ped >= static_cast<int>(m_Peds.size()))
-        return;
-
-    Ped& s_Ped = m_Peds[p_Ped];
-    NmAgent* a = s_Ped.m_Agent;
+void Delirium::Fire(NmAgent* a, const std::string& p_Name, float& p_Health, const std::string& p_What) {
     float s_Chest[3], s_Rot[4], s_Pelvis[3];
     nm_agent_get_part_transform(a, c_Chest, s_Chest, s_Rot);
     nm_agent_get_part_transform(a, 0, s_Pelvis, s_Rot);
@@ -280,7 +424,7 @@ void Delirium::Fire(int p_Ped, const std::string& p_What) {
 
     const auto s_Weapon = [&](const char* p_Name) {
         const int w = nm_weapon_find(p_Name);
-        s_Ped.m_Health = w >= 0 ? nm_agent_shoot_weapon(a, m_World, w, s_Part, s_At, s_D, s_Ped.m_Health) : s_Ped.m_Health;
+        p_Health = w >= 0 ? nm_agent_shoot_weapon(a, m_World, w, s_Part, s_At, s_D, p_Health) : p_Health;
         s_Result = w;
     };
 
@@ -294,7 +438,7 @@ void Delirium::Fire(int p_Ped, const std::string& p_What) {
         s_Result = nm_agent_task_explosion(a, m_World, s_Blast, 5.f, 15.f * k);
     }
     else if (p_What == "Taser") s_Result = nm_agent_tase(a, m_World, 3.f * k);
-    else if (p_What == "Set on fire") s_Result = nm_agent_task_on_fire(a, m_World, s_Ped.m_Health);
+    else if (p_What == "Set on fire") s_Result = nm_agent_task_on_fire(a, m_World, p_Health);
     else if (p_What == "Near miss") {
         const float s_Miss[3] = {m_Eye.x, m_Eye.y, m_Eye.z + 0.0f};
         const SVector3 s_Past = (V(s_Chest) + SVector3(0.f, 0.f, 0.5f) - m_Eye).Normalized();
@@ -321,47 +465,349 @@ void Delirium::Fire(int p_Ped, const std::string& p_What) {
         NmAgent* s_New = nm_agent_create(m_Build, s_Pos, std::atan2(s_Face.y, s_Face.x), 0.5f);
 
         if (s_New) {
+            for (Ped& s_Ped : m_Peds)
+                if (s_Ped.m_Agent == a)
+                    s_Ped.m_Agent = s_New;
+
             nm_agent_destroy(a);
-            s_Ped.m_Agent = s_New;
-            s_Ped.m_Health = 200.f;
+            p_Health = 200.f;
             s_Result = nm_agent_task_balance(s_New, m_World, "*", s_Eye);
         }
     }
     else if (p_What.starts_with("msg:")) s_Result = nm_msg_send_text(a, m_World, p_What.c_str() + 4);
 
-    m_Line = s_Result < 0 ? std::format("{} on {}: {}", p_What, s_Ped.m_Name, LastError())
-                          : std::format("{} on {} (health {:.0f}).", p_What, s_Ped.m_Name, s_Ped.m_Health);
+    m_Line = s_Result < 0 ? std::format("{} on {}: {}", p_What, p_Name, LastError())
+                          : std::format("{} on {} (health {:.0f}).", p_What, p_Name, p_Health);
     Logger::Info("[Delirium] {}", m_Line);
 }
 
-void Delirium::Snapshot() {
-    std::vector<std::vector<float>> s_Pose(m_Peds.size(), std::vector<float>(c_Parts * 7));
+Delirium::Body* Delirium::Hitman() {
+    for (Body& s_Body : m_Bodies)
+        if (!s_Body.m_Npc)
+            return &s_Body;
 
-    for (size_t i = 0; i < m_Peds.size(); ++i)
-        nm_agent_get_part_transforms(m_Peds[i].m_Agent, s_Pose[i].data(), c_Parts);
+    return nullptr;
+}
+
+// Every bone's world frame from the animation's pose this frame (parents first, bone 0 under the character's object).
+bool Delirium::Posed(Body& p_Body) {
+    if (!Bones::Read(p_Body.m_Anim, p_Body.m_Local) || p_Body.m_Local.size() != p_Body.m_Parents.size())
+        return false;
+
+    const SMatrix s_M = p_Body.m_Spatial->GetObjectToWorldMatrix();
+    const Q s_ObjQ = FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis);
+    const SVector3 s_ObjP(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z);
+    const size_t n = p_Body.m_Local.size();
+    p_Body.m_World.resize(n * 7);
+
+    for (size_t i = 0; i < n; ++i) {
+        const int s_Parent = p_Body.m_Parents[i];
+        const float* w = s_Parent >= 0 ? &p_Body.m_World[s_Parent * 7] : nullptr;
+        const Q s_Pq = w ? Q {w[3], w[4], w[5], w[6]} : s_ObjQ;
+        const SVector3 s_Pp = w ? V(w) : s_ObjP;
+        const Bones::SQV& l = p_Body.m_Local[i];
+        const Q q = Norm(Mul(s_Pq, Q {l.q[0], l.q[1], l.q[2], l.q[3]}));
+        const SVector3 p = s_Pp + Rot(s_Pq, V(l.p));
+        float* o = &p_Body.m_World[i * 7];
+        o[0] = p.x, o[1] = p.y, o[2] = p.z, o[3] = q.x, o[4] = q.y, o[5] = q.z, o[6] = q.w;
+    }
+
+    p_Body.m_Now.resize(p_Body.m_Bones.size() * 7);
+
+    for (size_t r = 0; r < p_Body.m_Bones.size(); ++r)
+        std::copy_n(&p_Body.m_World[p_Body.m_Bones[r] * 7], 7, &p_Body.m_Now[r * 7]);
+
+    return true;
+}
+
+// NM's pose onto the skeleton: every rig bone's turn under its parent, the pelvis's world frame under its own parent.
+void Delirium::WritePose(Body& p_Body) {
+    const size_t n = p_Body.m_Bones.size();
+
+    if (p_Body.m_Local.empty() || p_Body.m_World.empty())
+        return;
+
+    std::vector<float> s_Out(n * 4 + 3);
+    const int s_Hips = nm_rig_pose(p_Body.m_Rig, p_Body.m_Agent, s_Out.data());
+
+    if (s_Hips < 0 || s_Hips >= static_cast<int>(n))
+        return;
+
+    std::vector<Bones::SQV> s_Local = p_Body.m_Local;
+
+    for (size_t r = 0; r < n; ++r)
+        std::copy_n(&s_Out[r * 4], 4, s_Local[p_Body.m_Bones[r]].q);
+
+    const int s_Bone = p_Body.m_Bones[s_Hips];
+    const int s_Parent = p_Body.m_Parents[s_Bone];
+    Q s_Pq;
+    SVector3 s_Pp;
+
+    if (s_Parent >= 0) {
+        const float* w = &p_Body.m_World[s_Parent * 7];
+        s_Pq = {w[3], w[4], w[5], w[6]};
+        s_Pp = V(w);
+    }
+    else {
+        const SMatrix s_M = p_Body.m_Spatial->GetObjectToWorldMatrix();
+        s_Pq = FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis);
+        s_Pp = SVector3(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z);
+    }
+
+    const float* h = &s_Out[s_Hips * 4];
+    const Q s_Lq = Norm(Mul(Conj(s_Pq), Q {h[0], h[1], h[2], h[3]}));
+    const SVector3 s_Lp = Rot(Conj(s_Pq), V(&s_Out[n * 4]) - s_Pp);
+    Bones::SQV& l = s_Local[s_Bone];
+    l.q[0] = s_Lq.x, l.q[1] = s_Lq.y, l.q[2] = s_Lq.z, l.q[3] = s_Lq.w;
+    l.p[0] = s_Lp.x, l.p[1] = s_Lp.y, l.p[2] = s_Lp.z;
+    Bones::Override(p_Body.m_Anim, std::move(s_Local));
+}
+
+bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool p_Npc, bool p_Female,
+    const Ray& p_Ray, const std::string& p_Name) {
+    if (!p_Char || !p_Spatial || !Start())
+        return false;
+
+    Body b;
+    b.m_Char = p_Char;
+    b.m_Spatial = p_Spatial;
+    b.m_Npc = p_Npc;
+    b.m_Name = p_Name;
+    b.m_Anim = Bones::Animator(p_Char);
+
+    // Not posed yet (the hook only sees it from its next frame): try again later.
+    std::vector<Bones::SQV> s_Local;
+
+    if (!b.m_Anim || !Bones::Read(b.m_Anim, s_Local))
+        return false;
+
+    const int n = static_cast<int>(s_Local.size());
+    b.m_Parents = Bones::Parents(b.m_Anim, n);
+
+    if (b.m_Parents.empty() || n < 59) {
+        Logger::Warn("[Delirium] {}: couldn't read the skeleton ({} bones).", p_Name, n);
+        return false;
+    }
+
+    // The rig: the pelvis and everything under it, parents first (Hitman's own order).
+    std::vector<int> s_InRig(n, -1);
+    std::vector<int32_t> s_RigParents, s_Map;
+
+    for (int i = 1; i < n; ++i) {
+        const int s_Parent = b.m_Parents[i];
+
+        if (i == 1 || (s_Parent >= 0 && s_InRig[s_Parent] >= 0)) {
+            s_InRig[i] = static_cast<int>(b.m_Bones.size());
+            s_RigParents.push_back(i == 1 ? -1 : s_InRig[s_Parent]);
+            s_Map.push_back(PartOf(i));
+            b.m_Bones.push_back(i);
+        }
+    }
+
+    // The pose it stands in now is the rest pose (an idle's: arms down, as Homer stands; Pelican's advice).
+    if (!Posed(b))
+        return false;
+
+    const int s_N = static_cast<int>(b.m_Bones.size());
+    std::vector<float> s_Places(s_N * 3);
+
+    for (int r = 0; r < s_N; ++r)
+        std::copy_n(&b.m_Now[r * 7], 3, &s_Places[r * 3]);
+
+    char s_Report[2048] = {};
+
+    if (nm_rig_check(s_N, s_RigParents.data(), s_Places.data(), s_Map.data(), s_Report, sizeof(s_Report)) > 0)
+        Logger::Warn("[Delirium] {}'s skeleton: {}", p_Name, s_Report);
+
+    float s_Joints[63];
+
+    if (nm_rig_joints(s_N, s_RigParents.data(), s_Places.data(), s_Map.data(), s_Joints) < 0) {
+        Logger::Warn("[Delirium] {}: {}", p_Name, LastError());
+        return false;
+    }
+
+    // Homer's (or Wilma's) own body, unfitted, turned to face where the skeleton faces, its feet on the ground.
+    NmBuild* s_Build = p_Female && m_Wilma ? m_Wilma : m_Build;
+    float s_L[3], s_R[3], s_Rot[4];
+    nm_build_part_frame(s_Build, 1, s_L, s_Rot);
+    nm_build_part_frame(s_Build, 4, s_R, s_Rot);
+    const float s_Yaw = Facing(V(&b.m_World[8 * 7]), V(&b.m_World[16 * 7])) - Facing(V(s_L), V(s_R));
+
+    const SVector3 s_Hips = V(&b.m_World[1 * 7]);
+    float s_Floor = s_Hips.z;
+
+    for (int i = 0; i < n; ++i)
+        s_Floor = std::min(s_Floor, b.m_World[i * 7 + 2]);
+
+    SVector3 s_Hit, s_Normal;
+
+    if (p_Ray(s_Hips, s_Hips - SVector3(0.f, 0.f, 2.5f), s_Hit, s_Normal))
+        s_Floor = s_Hit.z;
+
+    const float s_At[3] = {s_Hips.x, s_Hips.y, s_Floor};
+    b.m_Agent = nm_agent_create(s_Build, s_At, s_Yaw, 0.37f);
+    b.m_Rig = b.m_Agent ? nm_rig_create(b.m_Agent, s_N, s_RigParents.data(), b.m_Now.data(), s_Map.data()) : nullptr;
+
+    if (!b.m_Rig) {
+        Logger::Warn("[Delirium] {}: {}", p_Name, LastError());
+
+        if (b.m_Agent)
+            nm_agent_destroy(b.m_Agent);
+
+        return false;
+    }
+
+    nm_rig_take(b.m_Rig, b.m_Agent, b.m_Now.data(), nullptr, 0.f);
+
+    if (p_Npc)
+        nm_agent_partial(b.m_Agent, NM_PARTIAL_LEGS);
+    else
+        nm_agent_keyframe(b.m_Agent, "fb", 1);
+
+    Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Build == m_Wilma ? "Wilma" : "Homer", n,
+        s_N);
+    m_Bodies.push_back(std::move(b));
+    return true;
+}
+
+void Delirium::Detach(Body& p_Body) {
+    Bones::Override(p_Body.m_Anim, {});
+
+    if (p_Body.m_Rig)
+        nm_rig_destroy(p_Body.m_Rig);
+
+    if (p_Body.m_Agent)
+        nm_agent_destroy(p_Body.m_Agent);
+
+    p_Body.m_Rig = nullptr;
+    p_Body.m_Agent = nullptr;
+}
+
+void Delirium::SetHitmanRagdoll(bool p_On) {
+    m_HitmanRagdoll = p_On;
+    Body* b = Hitman();
+
+    if (!b || b->m_Ragdoll == p_On)
+        return;
+
+    b->m_Ragdoll = p_On;
+
+    if (p_On) {
+        nm_agent_keyframe(b->m_Agent, "fb", 0);
+    }
+    else {
+        // Back on his animation from where it is now.
+        Bones::Override(b->m_Anim, {});
+
+        if (!b->m_Now.empty())
+            nm_rig_take(b->m_Rig, b->m_Agent, b->m_Now.data(), nullptr, 0.f);
+
+        nm_agent_keyframe(b->m_Agent, "fb", 1);
+    }
+
+    Logger::Info("[Delirium] 47 ragdoll {}.", p_On ? "on" : "off");
+}
+
+// Delirium on Hitman's NPCs: the nearest few near 47 get a body, the far, gone and out-of-mode ones lose theirs.
+void Delirium::UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet) {
+    std::vector<std::pair<float, TEntityRef<ZActor>>> s_Near;
+
+    if (m_NpcMode && Globals::ActorManager) {
+        for (const auto& s_Entry : Globals::ActorManager->m_activatedActors) {
+            ZActor* s_Actor = s_Entry.m_pInterfaceRef;
+            const auto s_Spatial = s_Entry.m_entityRef ? s_Entry.m_entityRef.QueryInterface<ZSpatialEntity>() : nullptr;
+
+            if (!s_Actor || !s_Spatial)
+                continue;
+
+            const float4 t = s_Spatial->GetObjectToWorldMatrix().Trans;
+            const float s_D = (SVector3(t.x, t.y, t.z) - p_Feet).Length();
+
+            if (s_D < 25.f)
+                s_Near.emplace_back(s_D, s_Entry);
+        }
+    }
+
+    std::ranges::sort(s_Near, {}, &std::pair<float, TEntityRef<ZActor>>::first);
+
+    std::erase_if(m_Bodies, [&](Body& b) {
+        const bool s_Keep = !b.m_Npc || std::ranges::any_of(s_Near, [&](const auto& n) {
+            return n.second.m_pInterfaceRef == b.m_Char;
+        });
+
+        if (!s_Keep)
+            Detach(b);
+
+        return !s_Keep;
+    });
+
+    int s_Count = static_cast<int>(std::ranges::count_if(m_Bodies, [](const Body& b) { return b.m_Npc; }));
+
+    for (const auto& [s_D, s_Actor] : s_Near) {
+        if (s_Count >= c_MaxNpcs || s_D > 15.f)
+            break;
+
+        ZActor* a = s_Actor.m_pInterfaceRef;
+
+        if (std::ranges::any_of(m_Bodies, [&](const Body& b) { return b.m_Char == a; }) || a->IsDead())
+            continue;
+
+        const ZGlobalOutfitKit* s_Outfit = a->m_rOutfit.m_pInterfaceRef;
+        const bool s_Female = s_Outfit && s_Outfit->m_bIsFemale;
+
+        if (Attach(a, s_Actor.m_entityRef.QueryInterface<ZSpatialEntity>(), true, s_Female, p_Ray,
+            std::string(a->m_sActorName.c_str(), a->m_sActorName.size())))
+            ++s_Count;
+    }
+}
+
+void Delirium::Snapshot() {
+    std::vector<std::vector<float>> s_Pose;
+    std::vector<std::string> s_Names;
+    const auto s_Add = [&](NmAgent* a) {
+        s_Pose.emplace_back(a ? c_Parts * 7 : 0);
+
+        if (a)
+            nm_agent_get_part_transforms(a, s_Pose.back().data(), c_Parts);
+    };
+
+    // In target order: 47, the peds, the NPCs.
+    const Body* s_Hitman = Hitman();
+    s_Add(s_Hitman ? s_Hitman->m_Agent : nullptr);
+
+    for (const Ped& s_Ped : m_Peds) {
+        s_Add(s_Ped.m_Agent);
+        s_Names.push_back(s_Ped.m_Name);
+    }
+
+    for (const Body& s_Body : m_Bodies) {
+        if (s_Body.m_Npc) {
+            s_Add(s_Body.m_Agent);
+            s_Names.push_back(s_Body.m_Name + (s_Body.m_Ragdoll ? " (ragdoll)" : ""));
+        }
+    }
 
     std::scoped_lock s_Lock(m_Mutex);
     m_Pose = std::move(s_Pose);
+    m_Names = std::move(s_Names);
+    m_PedsDrawn = m_Peds.size();
 }
 
 void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const SVector3& p_Aim,
-    const SVector3& p_Feet, const SVector3& p_Facing) {
+    const SVector3& p_Feet, const SVector3& p_Facing, ZHM5BaseCharacter* p_Hitman, ZSpatialEntity* p_HitmanSpatial) {
     m_Eye = p_Eye;
     m_Aim = p_Aim;
 
-    // Numpad 1: Delirium on NPCs. Numpad 2: 47 ragdolls. Numpad 5 / 6: shoot / push the ped you aim at.
+    // Numpad 1: Delirium on NPCs. Numpad 2: 47 ragdolls. Numpad 5 / 6: shoot / push the body you aim at.
     static bool s_K1, s_K2, s_K5, s_K6;
 
     if (KeyPressed(VK_NUMPAD1, s_K1)) {
         m_NpcMode = !m_NpcMode;
+        m_NpcTimer = 0.f;
         Logger::Info("[Delirium] NPC ragdolls {}.", m_NpcMode ? "on" : "off");
     }
 
-    if (KeyPressed(VK_NUMPAD2, s_K2)) {
-        m_HitmanRagdoll = !m_HitmanRagdoll;
-        Logger::Info("[Delirium] 47 ragdoll {}.", m_HitmanRagdoll ? "on" : "off");
-    }
-
+    bool s_ToggleRagdoll = KeyPressed(VK_NUMPAD2, s_K2);
     const bool s_Shoot = KeyPressed(VK_NUMPAD5, s_K5);
     const bool s_Push = KeyPressed(VK_NUMPAD6, s_K6);
 
@@ -374,21 +820,97 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         s_Fire = std::exchange(m_WantFire, {});
     }
 
-    if (s_Clear)
-        Clear();
+    if (s_Clear) {
+        for (Ped& s_Ped : m_Peds)
+            nm_agent_destroy(s_Ped.m_Agent);
+
+        m_Peds.clear();
+    }
 
     if (s_Spawn)
         Spawn(p_Ray, p_Feet, p_Facing);
 
-    if (!m_Ready || m_Peds.empty())
+    // 47's Homer body: on him while the menu says so (and to ragdoll him).
+    Body* s_Me = Hitman();
+
+    if (s_Me && (s_Me->m_Char != p_Hitman || !m_HitmanBody)) {
+        Detach(*s_Me);
+        std::erase_if(m_Bodies, [](const Body& b) { return !b.m_Npc; });
+        m_HitmanRagdoll = false;
+        s_Me = nullptr;
+    }
+
+    if (!s_Me && p_Hitman && (m_HitmanBody || s_ToggleRagdoll) && (m_HitmanTimer -= p_Dt) <= 0.f) {
+        m_HitmanTimer = 1.f;
+        m_HitmanBody = true;
+        Attach(p_Hitman, p_HitmanSpatial, false, false, p_Ray, "47");
+        s_Me = Hitman();
+    }
+
+    if (s_ToggleRagdoll)
+        SetHitmanRagdoll(!m_HitmanRagdoll);
+
+    if ((m_NpcTimer -= p_Dt) <= 0.f) {
+        m_NpcTimer = 1.f;
+
+        if (m_NpcMode || std::ranges::any_of(m_Bodies, [](const Body& b) { return b.m_Npc; }))
+            UpdateNpcs(p_Ray, p_Feet);
+    }
+
+    if (!m_Ready || (m_Peds.empty() && m_Bodies.empty()))
         return;
 
     if (s_Shoot || s_Push)
-        if (const int s_Ped = Aimed(); s_Ped >= 0)
-            s_Fire.emplace_back(s_Ped, s_Shoot ? "Shot (pistol)" : "Push");
+        if (const int t = Aimed(); t >= 0)
+            s_Fire.emplace_back(t, s_Shoot ? "Shot (pistol)" : "Push");
 
-    for (const auto& [s_Ped, s_What] : s_Fire)
-        Fire(s_Ped, s_What);
+    for (const auto& [t, s_What] : s_Fire) {
+        std::string* s_Name = nullptr;
+        float* s_Health = nullptr;
+        Body* s_Body = nullptr;
+        NmAgent* a = Target(t, s_Name, s_Health, s_Body);
+
+        if (!a)
+            continue;
+
+        // A body: hit, it goes; stood up, back on its animation.
+        if (s_Body && !s_Body->m_Npc && s_What != "Stand up again")
+            SetHitmanRagdoll(true);
+
+        if (s_Body && s_What == "Stand up again") {
+            if (!s_Body->m_Npc) {
+                SetHitmanRagdoll(false);
+            }
+            else if (!s_Body->m_Now.empty()) {
+                Bones::Override(s_Body->m_Anim, {});
+                s_Body->m_Ragdoll = false;
+                nm_agent_set_dead(a, 0);
+                nm_rig_take(s_Body->m_Rig, a, s_Body->m_Now.data(), nullptr, 0.f);
+                nm_agent_partial(a, NM_PARTIAL_LEGS);
+            }
+
+            m_Line = std::format("{} is back on the animation.", *s_Name);
+            continue;
+        }
+
+        Fire(a, *s_Name, *s_Health, s_What);
+    }
+
+    // The animation's pose in: what keyframed and partial bodies follow.
+    for (Body& b : m_Bodies) {
+        if (!Posed(b))
+            continue;
+
+        if (!b.m_Ragdoll)
+            nm_rig_incoming(b.m_Rig, b.m_Agent, b.m_Now.data());
+
+        // A kill in Hitman: he drops (Delirium's death, not the game's).
+        // ponytail: the game's own death ragdoll still takes the body over; detour ActivateRagdoll to keep NM's.
+        if (b.m_Npc && !b.m_Dead && static_cast<ZActor*>(b.m_Char)->IsDead()) {
+            b.m_Dead = true;
+            nm_agent_set_dead(b.m_Agent, 1);
+        }
+    }
 
     if ((m_GroundTimer -= p_Dt) <= 0.f) {
         m_GroundTimer = 0.25f;
@@ -402,9 +924,35 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     for (const Ped& s_Ped : m_Peds)
         s_Agents.push_back(s_Ped.m_Agent);
 
+    for (const Body& s_Body : m_Bodies)
+        s_Agents.push_back(s_Body.m_Agent);
+
     while (m_Accum >= c_Step) {
         m_Accum -= c_Step;
         nm_world_step_agents(m_World, s_Agents.data(), static_cast<int>(s_Agents.size()), c_Step, 0);
+    }
+
+    // NM's pose out onto the ragdolling ones.
+    for (Body& b : m_Bodies) {
+        if (b.m_Npc) {
+            switch (nm_agent_partial_event(b.m_Agent)) {
+                case NM_PARTIAL_KNOCKED:
+                case NM_PARTIAL_FELL:
+                case NM_PARTIAL_DROPPED:
+                    b.m_Ragdoll = true;
+                    break;
+                case NM_PARTIAL_RESUMED:
+                case NM_PARTIAL_RECOVERED:
+                    b.m_Ragdoll = false;
+                    Bones::Override(b.m_Anim, {});
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if (b.m_Ragdoll)
+            WritePose(b);
     }
 
     Snapshot();
@@ -414,7 +962,10 @@ void Delirium::Draw3D(IRenderer* p_Renderer) {
     std::scoped_lock s_Lock(m_Mutex);
 
     for (size_t p = 0; p < m_Pose.size(); ++p) {
-        const bool s_Picked = static_cast<int>(p) + 1 == m_Target;
+        if (m_Pose[p].empty() || (!m_ShowBodies && (p == 0 || p > m_PedsDrawn)))
+            continue;
+
+        const bool s_Picked = static_cast<int>(p) == m_Target;
         const SVector4 s_Color = s_Picked ? SVector4(1.f, 0.6f, 0.1f, 1.f) : SVector4(0.9f, 0.9f, 0.9f, 1.f);
 
         for (int i = 0; i < c_Parts && i < static_cast<int>(m_Half.size()); ++i) {
@@ -449,10 +1000,12 @@ void Delirium::DrawMenu() {
         return;
 
     ImGui::TextWrapped("%s", m_Status.c_str());
+    ImGui::Checkbox("47's Homer body", &m_HitmanBody);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show NM bodies", &m_ShowBodies);
     ImGui::Text("Numpad 1  Delirium on NPCs: %s", m_NpcMode ? "ON" : "off");
     ImGui::Text("Numpad 2  47 ragdoll: %s", m_HitmanRagdoll ? "ON" : "off");
-    ImGui::TextDisabled("47's Homer body and Hitman's own NPCs: being hooked up (needs Hitman's skeleton).");
-    ImGui::TextDisabled("Numpad 5 / 6: shoot / push the Delirium ped you aim at.");
+    ImGui::TextDisabled("Numpad 5 / 6: shoot / push the body you aim at (a ped or an NPC).");
     ImGui::Separator();
 
     std::scoped_lock s_Lock(m_Mutex);
@@ -462,61 +1015,56 @@ void Delirium::DrawMenu() {
 
     ImGui::SameLine();
 
-    if (ImGui::Button("Remove all"))
+    if (ImGui::Button("Remove peds"))
         m_WantClear = true;
 
-    // Who: 47, or one of the peds.
-    std::string s_Who = m_Target == 0 ? "47 (Homer body)" : std::format("Ped {}", m_Target);
+    // Who: 47, a ped or an NPC.
+    const auto s_NameOf = [&](int t) {
+        return t == 0 ? std::string("47 (Homer body)") : t - 1 < static_cast<int>(m_Names.size()) ? m_Names[t - 1] : "?";
+    };
+    m_Target = std::clamp(m_Target, 0, static_cast<int>(m_Names.size()));
 
-    if (ImGui::BeginCombo("Target", s_Who.c_str())) {
-        if (ImGui::Selectable("47 (Homer body)", m_Target == 0))
-            m_Target = 0;
-
-        for (size_t i = 0; i < m_Pose.size(); ++i)
-            if (ImGui::Selectable(std::format("Ped {}", i + 1).c_str(), m_Target == static_cast<int>(i) + 1))
-                m_Target = static_cast<int>(i) + 1;
+    if (ImGui::BeginCombo("Target", s_NameOf(m_Target).c_str())) {
+        for (int t = 0; t <= static_cast<int>(m_Names.size()); ++t)
+            if (ImGui::Selectable(std::format("{}##t{}", s_NameOf(t), t).c_str(), m_Target == t))
+                m_Target = t;
 
         ImGui::EndCombo();
     }
 
     ImGui::SliderFloat("Strength", &m_Strength, 0.2f, 4.f, "%.1fx");
 
-    if (m_Target == 0) {
-        ImGui::TextDisabled("Pick a ped: 47's body isn't hooked up yet.");
-    }
-    else {
-        for (int i = 0; i < static_cast<int>(std::size(c_Actions)); ++i) {
-            if (i % 3)
-                ImGui::SameLine();
-
-            if (ImGui::Button(c_Actions[i], ImVec2(118.f, 0.f)))
-                m_WantFire.emplace_back(m_Target - 1, c_Actions[i]);
-        }
-
-        // Every NM behaviour by name (the game's and Delirium's extras), started with its defaults.
-        if (!m_Messages.empty()) {
-            m_Message = std::clamp(m_Message, 0, static_cast<int>(m_Messages.size()) - 1);
-
-            if (ImGui::BeginCombo("Behaviour", m_Messages[m_Message].c_str())) {
-                for (int m = 0; m < static_cast<int>(m_Messages.size()); ++m)
-                    if (ImGui::Selectable(m_Messages[m].c_str(), m == m_Message))
-                        m_Message = m;
-
-                ImGui::EndCombo();
-            }
-
+    for (int i = 0; i < static_cast<int>(std::size(c_Actions)); ++i) {
+        if (i % 3)
             ImGui::SameLine();
 
-            if (ImGui::Button("Start"))
-                m_WantFire.emplace_back(m_Target - 1, "msg:" + m_Messages[m_Message] + " start=true");
+        if (ImGui::Button(c_Actions[i], ImVec2(118.f, 0.f)))
+            m_WantFire.emplace_back(m_Target, c_Actions[i]);
+    }
+
+    // Every NM behaviour by name (the game's and Delirium's extras), started with its defaults.
+    if (!m_Messages.empty()) {
+        m_Message = std::clamp(m_Message, 0, static_cast<int>(m_Messages.size()) - 1);
+
+        if (ImGui::BeginCombo("Behaviour", m_Messages[m_Message].c_str())) {
+            for (int m = 0; m < static_cast<int>(m_Messages.size()); ++m)
+                if (ImGui::Selectable(m_Messages[m].c_str(), m == m_Message))
+                    m_Message = m;
+
+            ImGui::EndCombo();
         }
 
-        ImGui::InputText("##line", m_Text, sizeof(m_Text));
         ImGui::SameLine();
 
-        if (ImGui::Button("Send"))
-            m_WantFire.emplace_back(m_Target - 1, std::string("msg:") + m_Text);
+        if (ImGui::Button("Start"))
+            m_WantFire.emplace_back(m_Target, "msg:" + m_Messages[m_Message] + " start=true");
     }
+
+    ImGui::InputText("##line", m_Text, sizeof(m_Text));
+    ImGui::SameLine();
+
+    if (ImGui::Button("Send"))
+        m_WantFire.emplace_back(m_Target, std::string("msg:") + m_Text);
 
     if (!m_Line.empty())
         ImGui::TextWrapped("%s", m_Line.c_str());

@@ -35,6 +35,8 @@
 
 #include "PortalLog.h"
 #include "PortalViewJson.h"
+#include "Sfx.h"
+#include "Bones.h"
 #define Logger PortalLog
 
 namespace {
@@ -208,6 +210,7 @@ PortalGun::PortalGun() :
     m_CubeId(ZString("bb42bbb6-289b-46f6-83ae-201385d0deb1")) {}
 
 PortalGun::~PortalGun() {
+    Bones::Uninstall();
     const ZMemberDelegate<PortalGun, void(const SGameUpdateEvent&)> s_Delegate(this, &PortalGun::OnFrameUpdate);
     Globals::GameLoopManager->UnregisterFrameUpdate(s_Delegate, 1, EUpdateMode::eUpdatePlayMode);
 }
@@ -281,6 +284,7 @@ void PortalGun::FindGames() {
     );
 
     m_Delirium.Configure(m_ModDir / "Delirium", m_Gta4Path);
+    Sfx::Load(m_Portal2Path);
 }
 
 // PortalGun.seen next to the DLL: there once the window has been closed, with a line per game the user skipped.
@@ -649,10 +653,7 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
     m_PrevFeet = ToVec3(s_Trans.Trans);
     m_HasPrevFeet = true;
 
-    if (!m_Blue.m_Placed || !m_Orange.m_Placed)
-        return;
-
-    if (!TryTeleport(m_Blue, m_Orange, s_HitmanSpatial, s_Trans))
+    if (m_Blue.m_Placed && m_Orange.m_Placed && !TryTeleport(m_Blue, m_Orange, s_HitmanSpatial, s_Trans))
         TryTeleport(m_Orange, m_Blue, s_HitmanSpatial, s_Trans);
 
     UpdateViews(s_LocalHitman.m_entityRef);
@@ -666,7 +667,7 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
                 return RayCast(p_From, p_To, s_Me, p_Hit, p_Normal);
             },
             ToVec3(s_Cam.Trans), (ToVec3(s_Cam.CameraBackward) * -1.f).Normalized(), ToVec3(s_PlayerTrans.Trans),
-            ToVec3(s_PlayerTrans.YAxis)
+            ToVec3(s_PlayerTrans.YAxis), s_LocalHitman.m_pInterfaceRef, s_HitmanSpatial
         );
     }
 }
@@ -1043,6 +1044,8 @@ bool PortalGun::ShootPortal(
     DpHit s_ShotHit {};
     ZEntityRef s_Ignore = p_Hitman;
 
+    const bool s_IsBlue = &p_Portal == &m_Blue;
+    Sfx::Play(s_IsBlue ? Sfx::ShootBlue : Sfx::ShootOrange);
     const int s_Result = dp_shoot(
         &DpRayCast, &s_Ignore, &s_From, &s_Dir, c_MaxRange, p_Other.m_Placed ? &s_Other : nullptr,
         s_BothOpen ? s_Linked : nullptr, &s_Out, &s_ShotHit
@@ -1064,6 +1067,7 @@ bool PortalGun::ShootPortal(
 
     p_Portal = {};
     p_Portal.m_Transform = s_Frame;
+    Sfx::Play(s_IsBlue ? Sfx::OpenBlue : Sfx::OpenOrange);
     p_Portal.m_Placed = true;
 
     Logger::Info(

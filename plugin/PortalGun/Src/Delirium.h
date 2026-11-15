@@ -4,6 +4,8 @@
 
 #include <Glacier/ZMath.h>
 
+#include "Bones.h"
+
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -11,6 +13,9 @@
 #include <vector>
 
 class IRenderer;
+class ZHM5BaseCharacter;
+class ZSpatialEntity;
+struct NmRig;
 struct NmWorld;
 struct NmBuild;
 struct NmAgent;
@@ -24,8 +29,9 @@ public:
     void Configure(const std::filesystem::path& p_Dir, const std::string& p_Gta4);
 
     // Each frame (game thread). `p_Eye` / `p_Aim`: the camera; `p_Feet` / `p_Facing`: 47.
+    // `p_Hitman` / `p_HitmanSpatial`: 47 (his Homer body rides his skeleton).
     void Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const SVector3& p_Aim, const SVector3& p_Feet,
-        const SVector3& p_Facing);
+        const SVector3& p_Facing, ZHM5BaseCharacter* p_Hitman, ZSpatialEntity* p_HitmanSpatial);
     void Draw3D(IRenderer* p_Renderer);
     void DrawMenu();
     void Clear();
@@ -33,6 +39,8 @@ public:
     // The hotkeys' states (shown in the menu): Delirium on NPCs, and 47 ragdolling.
     bool m_NpcMode = false;
     bool m_HitmanRagdoll = false;
+    bool m_HitmanBody = true;
+    bool m_ShowBodies = true;
 
 private:
     struct Ped {
@@ -41,11 +49,41 @@ private:
         float m_Health = 200.f;
     };
 
+    // A Hitman character with an NM body on its skeleton (Homer's, Wilma's for women): 47 keyframed on his
+    // animation (ragdolling on Numpad 2), NPCs a partial ragdoll (legs on the animation) knocked into a full one.
+    struct Body {
+        ZHM5BaseCharacter* m_Char = nullptr;
+        ZSpatialEntity* m_Spatial = nullptr;
+        void* m_Anim = nullptr;
+        NmAgent* m_Agent = nullptr;
+        NmRig* m_Rig = nullptr;
+        std::vector<int> m_Bones;      // Hitman bone of each rig bone (the pelvis and everything under it)
+        std::vector<int32_t> m_Parents; // Hitman's parents, every bone
+        std::vector<float> m_Now;      // the rig bones' world frames this frame (7 floats each)
+        std::vector<Bones::SQV> m_Local; // the animation's pose this frame (Hitman's, every bone)
+        std::vector<float> m_World;    // every bone's world frame this frame (7 floats each)
+        bool m_Dead = false;
+        bool m_Npc = false;
+        bool m_Ragdoll = false;
+        std::string m_Name;
+        float m_Health = 200.f;
+    };
+
     bool Start();
+    bool Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool p_Npc, bool p_Female, const Ray& p_Ray,
+        const std::string& p_Name);
+    void Detach(Body& p_Body);
+    bool Posed(Body& p_Body);
+    void WritePose(Body& p_Body);
+    void UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet);
+    void SetHitmanRagdoll(bool p_On);
+    Body* Hitman();
+    // Target `t` (0 47's body, then the peds, then the NPCs' bodies): its agent, name and health; null for none.
+    NmAgent* Target(int t, std::string*& p_Name, float*& p_Health, Body*& p_Body);
     void Spawn(const Ray& p_Ray, const SVector3& p_Feet, const SVector3& p_Facing);
     void UpdateGround(const Ray& p_Ray);
-    void Fire(int p_Ped, const std::string& p_What);
-    int Aimed() const;
+    void Fire(NmAgent* a, const std::string& p_Name, float& p_Health, const std::string& p_What);
+    int Aimed();
     void Snapshot();
 
     std::filesystem::path m_Dir;
@@ -56,6 +94,10 @@ private:
 
     NmWorld* m_World = nullptr;
     NmBuild* m_Build = nullptr;
+    NmBuild* m_Wilma = nullptr;
+    std::vector<Body> m_Bodies;
+    float m_NpcTimer = 0.f;
+    float m_HitmanTimer = 0.f;
     std::vector<Ped> m_Peds;
     std::vector<std::string> m_Messages;
     std::vector<float> m_Radius, m_Half;
@@ -64,7 +106,7 @@ private:
     std::mutex m_Mutex;
     bool m_WantSpawn = false;
     bool m_WantClear = false;
-    std::vector<std::pair<int, std::string>> m_WantFire;
+    std::vector<std::pair<int, std::string>> m_WantFire; // target (0 = 47), action
 
     // What the menu picked.
     int m_Target = 0; // 0 = 47, 1.. = peds
@@ -75,7 +117,9 @@ private:
 
     // The last step's eye ray and the parts to draw (render thread reads these).
     SVector3 m_Eye, m_Aim;
-    std::vector<std::vector<float>> m_Pose; // per ped: 21 x 7 floats
+    std::vector<std::vector<float>> m_Pose; // per ped and body: 21 x 7 floats
+    size_t m_PedsDrawn = 0;
+    std::vector<std::string> m_Names; // the targets after 47, for the menu
     float m_Accum = 0.f;
     float m_GroundTimer = 0.f;
 };
