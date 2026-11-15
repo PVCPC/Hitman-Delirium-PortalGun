@@ -19,7 +19,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 10 | Female NPCs use Wilma | built |
 | 11 | Holding objects or guns while ragdolled | open: plan is to drop the item when he goes down |
 | 22 | Ragdolls have no behaviours (fall over limp, no balance / catch fall / high fall) | built: balance on every knock-down (unlimited steps, Playroom default), high fall past 6 m/s, shots keep their own reactions |
-| 23 | Pushed peds fall through the map / through walls | map: confirmed fixed. Walls: built, wall panels in NM's world around each body (none in an open portal) |
+| 23 | Pushed peds fall through the map / walls (still through a shed) | map: confirmed. Walls: 30 cm thick slabs (thin ones were skipped through in one step); wall rays had also been ignoring walls near the pushed ped itself |
 | 24 | 47's arms match less while running / walking with the gun | open: the gun's aim layer likely moves the arms after the pose we read |
 
 ## Portals
@@ -28,7 +28,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 |---|---|---|
 | 12 | Walking through portals | confirmed: Billy walks through |
 | 13 | Half in, half out of a portal (Playroom ghosts) | open: Hitman's mesh is one piece; needs a second copy or clip planes |
-| 14 | Portals see-through (cameras render now, way too bright) | built: tablet behind each portal's wall; camera no longer a UI camera (exposure). Untested |
+| 14 | Portal cameras white / overexposed | built: cameras are picture-in-picture cameras now (the game's tonemapped path) |
 | 15 | Portals too loud | built: volume slider, 0.3 by default |
 | 16 | Portals only stick to perfectly flat surfaces | built: 10 cm / 37 degree tolerance |
 | 17 | How to shoot orange when right-click is aim | built: right-click fires orange with the gun out |
@@ -54,3 +54,7 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | # | Issue | Status |
 |---|---|---|
 | 21 | Portal 2 gun model, animations, cube, effects from Billy's Portal 2 | open |
+| 33 | Can't push downed peds any more | built: the new walls were being built out of 47's and the ped's own collision; characters are skipped now |
+| 34 | 47's belly sticks out | built: every body's capsules were drawn at Homer's default size, not its fitted size; drawn at its own now |
+| 35 | Huge hitches at portals / entering ragdoll | built: ground and wall scans run one body a frame instead of all at once; the log now times anything over 4 ms ([Hitch] lines) |
+| 36 | Homer capsules jitter between physics steps | built: drawn interpolated between steps, like the mesh |

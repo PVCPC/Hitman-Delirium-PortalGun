@@ -2126,6 +2126,14 @@ DEFINE_PLUGIN_DETOUR(PortalGun, void, OnClearScene, ZEntitySceneContext* th, boo
 }
 
 void PortalGun::SpawnViews() {
+    const auto s_Start = std::chrono::steady_clock::now();
+    struct Done {
+        std::chrono::steady_clock::time_point t;
+        ~Done() {
+            Logger::Info("[Hitch] Portal cameras spawned in {:.1f} ms.",
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t).count());
+        }
+    } s_Done {s_Start};
     const auto s_Scene = Globals::Hitman5Module->m_pEntitySceneContext->m_pScene;
 
     if (!s_Scene || !(*Globals::ApplicationEngineWin32)->m_bSceneLoaded)

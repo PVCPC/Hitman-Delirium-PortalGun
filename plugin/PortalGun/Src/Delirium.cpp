@@ -27,6 +27,20 @@
 
 #include "gta4nm.h"
 
+#include <chrono>
+
+// Logs any of our steps that takes long enough to hitch a frame (what the hitches are).
+struct HitchTimer {
+    const char* m_What;
+    std::chrono::steady_clock::time_point m_Start = std::chrono::steady_clock::now();
+    ~HitchTimer() {
+        const float ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - m_Start).count();
+
+        if (ms > 4.f)
+            Logger::Info("[Hitch] {} took {:.1f} ms.", m_What, ms);
+    }
+};
+
 namespace {
     constexpr float c_Step = 1.f / 60.f;
     constexpr int c_Parts = 21;
@@ -371,7 +385,8 @@ void Delirium::Spawn(const Ray& p_Ray, const SVector3& p_Feet, const SVector3& p
 
 // The level under each ped, as a 3 m patch of ground sampled with Hitman's rays (nm_world_set_mesh per ped).
 // ponytail: ground only, walls and ledges need side rays or the level's real collision mesh.
-void Delirium::UpdateGround(const Ray& p_Ray) {
+void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
+    HitchTimer s_T {p_One ? "Ground patch" : "Ground patches"};
     constexpr int c_N = 7;
     constexpr float c_Spacing = 0.5f;
 
@@ -383,7 +398,12 @@ void Delirium::UpdateGround(const Ray& p_Ray) {
     for (const Body& s_Body : m_Bodies)
         s_Agents.push_back(s_Body.m_Agent);
 
+    const size_t s_One = p_One && !s_Agents.empty() ? m_GroundNext++ % s_Agents.size() : SIZE_MAX;
+
     for (size_t p = 0; p < s_Agents.size() && p < c_MaxMeshes; ++p) {
+        if (s_One != SIZE_MAX && p != s_One)
+            continue;
+
         if (std::ranges::any_of(m_Bodies, [&](const Body& b) { return b.m_Agent == s_Agents[p] && b.m_GettingUp; }))
             continue;
 
@@ -469,7 +489,7 @@ void Delirium::UpdateGround(const Ray& p_Ray) {
                 bool s_NearSomeone = false;
 
                 for (const Body& o : m_Bodies) {
-                    if (o.m_Now.size() < 3)
+                    if (o.m_Now.size() < 3 || o.m_Agent == s_Agents[p])
                         continue;
 
                     const float dx = o.m_Now[0] - s_Hit.x, dy = o.m_Now[1] - s_Hit.y;
@@ -502,8 +522,17 @@ void Delirium::UpdateGround(const Ray& p_Ray) {
                     s_Verts.insert(s_Verts.end(), {v.x, v.y, s_Floor + sz});
                 }
 
-                // NM's triangles collide on both sides (a second winding pushed twice: jitter; Pelican).
-                s_Tris.insert(s_Tris.end(), {s_Base, s_Base + 1, s_Base + 2, s_Base, s_Base + 2, s_Base + 3});
+                // A slab 30 cm thick (a fast body went through a flat face between steps): front, back, top, ends.
+                for (const auto [sx, sz] : {std::pair {-0.4f, -0.3f}, {0.4f, -0.3f}, {0.4f, 2.2f}, {-0.4f, 2.2f}}) {
+                    const SVector3 v = s_Hit + s_Side * sx - n * 0.3f;
+                    s_Verts.insert(s_Verts.end(), {v.x, v.y, s_Floor + sz});
+                }
+
+                // NM's triangles collide on both sides (Pelican): one winding each.
+                const uint32_t f0 = s_Base, f1 = s_Base + 1, f2 = s_Base + 2, f3 = s_Base + 3;
+                const uint32_t b0 = s_Base + 4, b1 = s_Base + 5, b2 = s_Base + 6, b3 = s_Base + 7;
+                s_Tris.insert(s_Tris.end(), {f0, f1, f2, f0, f2, f3, b0, b2, b1, b0, b3, b2, f3, f2, b2, f3, b2, b3, f0, f3, b3,
+                    f0, b3, b0, f1, b1, b2, f1, b2, f2});
             }
         }
 
@@ -1115,6 +1144,7 @@ void Delirium::SetHitmanRagdoll(bool p_On) {
 }
 
 void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
+    HitchTimer s_T {p_On ? "Ragdoll on" : "Ragdoll off"};
     Body* b = &p_Body;
 
     if (b->m_Ragdoll == p_On)
@@ -1218,11 +1248,23 @@ void Delirium::UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet) {
 void Delirium::Snapshot() {
     std::vector<std::vector<float>> s_Pose;
     std::vector<std::string> s_Names;
-    const auto s_Add = [&](NmAgent* a) {
+    std::vector<std::vector<float>> s_Sizes;
+    const auto s_Add = [&](NmAgent* a, const NmBuild* p_Build = nullptr) {
         s_Pose.emplace_back(a ? c_Parts * 7 : 0);
+        s_Sizes.emplace_back();
 
         if (!a)
             return;
+
+        for (int i = 0; i < c_Parts; ++i) {
+            float m, r = m_Radius[i], h = m_Half[i];
+            int s_Parent;
+
+            if (p_Build)
+                nm_build_part_info(p_Build, i, &m, &r, &h, &s_Parent);
+
+            s_Sizes.back().insert(s_Sizes.back().end(), {r, h});
+        }
 
         auto& [s_Prev, s_Cur] = m_DrawPose[a];
 
@@ -1259,7 +1301,7 @@ void Delirium::Snapshot() {
 
     // In target order: 47, the peds, the NPCs.
     const Body* s_Hitman = Hitman();
-    s_Add(s_Hitman ? s_Hitman->m_Agent : nullptr);
+    s_Add(s_Hitman ? s_Hitman->m_Agent : nullptr, s_Hitman ? s_Hitman->m_Build : nullptr);
 
     for (const Ped& s_Ped : m_Peds) {
         s_Add(s_Ped.m_Agent);
@@ -1268,7 +1310,7 @@ void Delirium::Snapshot() {
 
     for (const Body& s_Body : m_Bodies) {
         if (s_Body.m_Npc) {
-            s_Add(s_Body.m_Agent);
+            s_Add(s_Body.m_Agent, s_Body.m_Build);
             s_Names.push_back(s_Body.m_Name + (s_Body.m_Ragdoll ? " (ragdoll)" : ""));
         }
     }
@@ -1284,6 +1326,7 @@ void Delirium::Snapshot() {
     std::scoped_lock s_Lock(m_Mutex);
     m_Lines = std::move(s_Lines);
     m_Pose = std::move(s_Pose);
+    m_Sizes = std::move(s_Sizes);
     m_Names = std::move(s_Names);
     m_PedsDrawn = m_Peds.size();
 }
@@ -1436,9 +1479,10 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         }
     }
 
+    // One body's patch a frame, each body about every 0.25 s.
     if ((m_GroundTimer -= p_Dt) <= 0.f) {
-        m_GroundTimer = 0.25f;
-        UpdateGround(p_Ray);
+        m_GroundTimer = 0.25f / static_cast<float>(std::max<size_t>(1, m_Bodies.size() + m_Peds.size()));
+        UpdateGround(p_Ray, true);
     }
 
     // NM's own 60 steps a second, at most 4 a frame.
@@ -1456,7 +1500,10 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         s_Agents.push_back(s_Body.m_Agent);
 
     if (s_Steps > 0) {
+    {
+        HitchTimer s_T {"NM step"};
         nm_world_step_agents(m_World, s_Agents.data(), static_cast<int>(s_Agents.size()), s_Steps * c_Step, 0);
+    }
     }
 
     // Ragdolls through the portals, the Playroom's way (portal.rs funnel_agent, transit): Portal 2's funnel steers a
@@ -1633,7 +1680,8 @@ void Delirium::Draw3D(IRenderer* p_Renderer) {
             const SVector3 s_Y = Rotate(s_T + 3, SVector3(0.f, 1.f, 0.f));
             const SVector3 s_X = Rotate(s_T + 3, SVector3(1.f, 0.f, 0.f));
             const SVector3 s_Z = Rotate(s_T + 3, SVector3(0.f, 0.f, 1.f));
-            const float r = m_Radius[i], h = m_Half[i];
+            const bool s_Own = p < m_Sizes.size() && m_Sizes[p].size() == c_Parts * 2;
+            const float r = s_Own ? m_Sizes[p][i * 2] : m_Radius[i], h = s_Own ? m_Sizes[p][i * 2 + 1] : m_Half[i];
 
             // Each part's capsule: its two end rings and four lines between them.
             constexpr int c_Seg = 10;

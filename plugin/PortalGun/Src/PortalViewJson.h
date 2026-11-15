@@ -77,7 +77,7 @@ inline constexpr const char* c_PortalViewJson = R"(
                 },
                 "m_bIsPIP": {
                     "type": "bool",
-                    "value": false
+                    "value": true
                 },
                 "m_bDrawGates": {
                     "type": "bool",
@@ -148,7 +148,7 @@ inline constexpr const char* c_PortalViewJson = R"(
                 },
                 "m_nPIPPriority": {
                     "type": "uint32",
-                    "value": 0
+                    "value": 1
                 },
                 "m_eRoomBehaviour": {
                     "type": "ZSpatialEntity.ERoomBehaviour",

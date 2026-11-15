@@ -112,7 +112,7 @@ private:
     // Target `t` (0 47's body, then the peds, then the NPCs' bodies): its agent, name and health; null for none.
     NmAgent* Target(int t, std::string*& p_Name, float*& p_Health, Body*& p_Body);
     void Spawn(const Ray& p_Ray, const SVector3& p_Feet, const SVector3& p_Facing);
-    void UpdateGround(const Ray& p_Ray);
+    void UpdateGround(const Ray& p_Ray, bool p_One = false);
     void Fire(NmAgent* a, const std::string& p_Name, float& p_Health, const std::string& p_What);
     int Aimed();
     void Snapshot();
@@ -132,6 +132,7 @@ private:
     std::vector<Ped> m_Peds;
     std::vector<std::string> m_Messages;
     std::vector<float> m_Radius, m_Half;
+    std::vector<std::vector<float>> m_Sizes; // per drawn body: each part's radius and half length
 
     // Requests from the menu (UI thread), done on the game thread.
     std::mutex m_Mutex;
@@ -158,4 +159,5 @@ private:
     std::unordered_map<NmAgent*, std::pair<std::vector<float>, std::vector<float>>> m_DrawPose; // last two steps, for drawing
     std::unordered_map<NmAgent*, float> m_LastGround; // the last ground under each body
     float m_GroundTimer = 0.f;
+    size_t m_GroundNext = 0;
 };
