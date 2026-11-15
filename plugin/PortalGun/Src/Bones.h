@@ -47,6 +47,10 @@ namespace Bones {
     // Poses it with this from now on (same bone count as Read's); empty: its animation again.
     void Override(void* p_Animator, std::vector<SQV> p_Local);
 
+    // Once per run (Pelican): a hardware watch on this animator's bone `p_Bone` translation, right after our Override:
+    // who in Hitman writes it next (5 s), else who reads it (3 s). Logged from Tick, then disarmed.
+    void Watch(void* p_Animator, int p_Bone);
+
     // Puts the vtable back (unloading).
     void Uninstall();
 }

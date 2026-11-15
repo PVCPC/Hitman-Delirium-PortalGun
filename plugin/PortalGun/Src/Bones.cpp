@@ -13,6 +13,8 @@
 #include <format>
 #include <unordered_map>
 #include <atomic>
+#include <thread>
+#include <TlHelp32.h>
 #include <Logging.h>
 #include "PortalLog.h"
 
@@ -22,6 +24,109 @@ namespace {
     using UpdateFn = void(*)(void*, const void*, uint8_t*, const void*, void*, void*, void*);
 
     std::atomic<uint64_t> g_Frame {0};
+
+    // The bone watch: DR0 on every thread; hits on a thread inside our Hook (the game's UpdateBones under it, our own
+    // Override) don't count.
+    thread_local int t_InHook = 0;
+    std::atomic<void*> g_WatchAnim {nullptr};
+    std::atomic<int> g_WatchBone {-1};
+    std::atomic<uintptr_t> g_WatchAddr {0};
+    std::atomic<int> g_WatchMode {0}; // 0 not yet, 1 writes, 2 reads and writes, 3 done
+    struct WatchHit {
+        uintptr_t m_Rip, m_Stack[6];
+        int m_Mode, m_Count;
+        DWORD m_Thread;
+    };
+    WatchHit g_Hits[16];
+    std::atomic<int> g_HitCount {0};
+    int g_HitsLogged = 0;
+    PVOID g_Veh = nullptr;
+    uintptr_t g_Exe = 0, g_ExeEnd = 0;
+
+    LONG CALLBACK WatchVeh(EXCEPTION_POINTERS* e) {
+        if (e->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP || !(e->ContextRecord->Dr6 & 1))
+            return EXCEPTION_CONTINUE_SEARCH;
+
+        CONTEXT* c = e->ContextRecord;
+        c->Dr6 = 0;
+        const int s_Mode = g_WatchMode.load();
+
+        if ((s_Mode == 1 || s_Mode == 2) && !t_InHook) {
+            bool s_Seen = false;
+            const int n = std::min(g_HitCount.load(), 16);
+
+            for (int i = 0; i < n; ++i)
+                if (g_Hits[i].m_Rip == c->Rip)
+                    s_Seen = true, ++g_Hits[i].m_Count;
+
+            if (!s_Seen) {
+                const int k = g_HitCount.fetch_add(1);
+
+                if (k < 16) {
+                    WatchHit& h = g_Hits[k];
+                    h = {};
+                    h.m_Rip = c->Rip;
+                    h.m_Mode = s_Mode;
+                    h.m_Count = 1;
+                    h.m_Thread = GetCurrentThreadId();
+                    int j = 0;
+
+                    __try {
+                        for (int i = 0; i < 96 && j < 6; ++i) {
+                            const uintptr_t v = reinterpret_cast<const uintptr_t*>(c->Rsp)[i];
+
+                            if (v >= g_Exe && v < g_ExeEnd)
+                                h.m_Stack[j++] = v;
+                        }
+                    }
+                    __except (EXCEPTION_EXECUTE_HANDLER) {}
+                }
+            }
+        }
+
+        if (s_Mode == 0 || s_Mode == 3)
+            c->Dr7 &= ~0xF0003ull;
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    void ArmAll(uintptr_t p_Addr, int p_Mode) {
+        const DWORD64 s_Dr7 = p_Addr && (p_Mode == 1 || p_Mode == 2)
+            ? 1ull | (static_cast<DWORD64>(p_Mode == 1 ? 1 : 3) << 16) | (2ull << 18) : 0; // 8 bytes, writes / any
+        const HANDLE s_Snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+
+        if (s_Snap == INVALID_HANDLE_VALUE)
+            return;
+
+        THREADENTRY32 te {sizeof(te)};
+
+        for (BOOL ok = Thread32First(s_Snap, &te); ok; ok = Thread32Next(s_Snap, &te)) {
+            if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == GetCurrentThreadId())
+                continue;
+
+            const HANDLE t = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+
+            if (!t)
+                continue;
+
+            if (SuspendThread(t) != static_cast<DWORD>(-1)) {
+                CONTEXT ctx {};
+                ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+
+                if (GetThreadContext(t, &ctx)) {
+                    ctx.Dr0 = p_Addr;
+                    ctx.Dr7 = (ctx.Dr7 & ~0xF0003ull) | s_Dr7;
+                    SetThreadContext(t, &ctx);
+                }
+
+                ResumeThread(t);
+            }
+
+            CloseHandle(t);
+        }
+
+        CloseHandle(s_Snap);
+    }
 
     struct State {
         // UpdateBones runs more than once a frame for a character (the base, then upper-body / aim passes). Each
@@ -94,6 +199,10 @@ namespace {
     }
 
     void Hook(void* p_This, const void* p_Data, uint8_t* p_Pose, const void* p_World, void* a5, void* a6, void* a7) {
+        struct InHook {
+            InHook() { ++t_InHook; }
+            ~InHook() { --t_InHook; }
+        } s_In;
         OrigOf(p_This)(p_This, p_Data, p_Pose, p_World, a5, a6, a7);
 
         if (!p_Pose)
@@ -178,6 +287,13 @@ namespace {
             s_New.p[3] = s_Bones[i].p[3];
             s_Bones[i] = s_New;
         }
+
+        if (p_This == g_WatchAnim.load() && g_WatchBone.load() >= 0 && static_cast<uint32_t>(g_WatchBone.load()) < n) {
+            const auto s_At = reinterpret_cast<uintptr_t>(&s_Bones[g_WatchBone.load()].p[0]);
+
+            if (!(s_At & 7))
+                g_WatchAddr = s_At;
+        }
     }
 
     uint8_t* BoneData(void* p_Animator) {
@@ -233,6 +349,53 @@ void* Bones::HitmanAnimator(ZHitman5* p_Hitman) {
 
 void Bones::Tick() {
     ++g_Frame;
+    const int n = std::min(g_HitCount.load(), 16);
+
+    for (; g_HitsLogged < n; ++g_HitsLogged) {
+        const WatchHit& h = g_Hits[g_HitsLogged];
+        std::string s_Stack;
+
+        for (const uintptr_t v : h.m_Stack)
+            if (v)
+                s_Stack += std::format("+{:x} ", v - g_Exe);
+
+        Logger::Info("[Bones] watch: {} the watched bone after our Override at HITMAN3+{:x} (thread {}); stack {}",
+            h.m_Mode == 1 ? "wrote" : "read or wrote", h.m_Rip - g_Exe, h.m_Thread, s_Stack);
+    }
+}
+
+void Bones::Watch(void* p_Animator, int p_Bone) {
+    static std::atomic<bool> s_Once {false};
+
+    if (!p_Animator || p_Bone < 0 || s_Once.exchange(true))
+        return;
+
+    g_Exe = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    const auto* s_Dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(g_Exe);
+    g_ExeEnd = g_Exe + reinterpret_cast<const IMAGE_NT_HEADERS64*>(g_Exe + s_Dos->e_lfanew)->OptionalHeader.SizeOfImage;
+    g_WatchBone = p_Bone;
+    g_WatchAnim = p_Animator;
+    g_Veh = AddVectoredExceptionHandler(1, WatchVeh);
+    Logger::Info("[Bones] watch: bone {} of {} (Pelican: who overwrites our pose).", p_Bone, p_Animator);
+
+    std::thread([] {
+        // Writes for 5 s; nothing then: reads and writes for 3 s (the skinning may not read this buffer at all).
+        for (int t = 0; t < 80 && g_WatchMode.load() != 3; ++t) {
+            const int s_Mode = t < 50 ? 1 : 2;
+
+            if (t == 50 && g_HitCount.load() > 0)
+                break;
+
+            g_WatchMode = s_Mode;
+            ArmAll(g_WatchAddr.load(), s_Mode);
+            Sleep(100);
+        }
+
+        const int s_Hits = g_HitCount.load();
+        g_WatchMode = 3;
+        ArmAll(0, 3);
+        Logger::Info("[Bones] watch: done, {} places.", s_Hits);
+    }).detach();
 }
 
 bool Bones::Read(void* p_Animator, std::vector<SQV>& p_Local) {
@@ -284,6 +447,13 @@ void Bones::Override(void* p_Animator, std::vector<SQV> p_Local) {
 }
 
 void Bones::Uninstall() {
+    if (g_Veh) {
+        g_WatchMode = 3;
+        ArmAll(0, 3);
+        RemoveVectoredExceptionHandler(g_Veh);
+        g_Veh = nullptr;
+    }
+
     std::scoped_lock s_Lock(g_Mutex);
 
     for (Patched& p : g_Patched) {

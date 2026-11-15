@@ -1238,6 +1238,10 @@ void Delirium::Follow(Body& b) {
 
         Logger::Info("[Delirium] {}: following its ragdoll's {} bodies ({}, offsets {}): {}", b.m_Name, n, ClassOf(s_Bodies[0]),
             s_AtKill ? "from the kill frame" : "from now", s_Log);
+
+        // Pelican: catch what in Hitman draws its ragdoll's pose over ours (the hips, once a run).
+        if (b.m_PoseHips >= 0 && b.m_PoseHips < static_cast<int>(b.m_Bones.size()))
+            Bones::Watch(b.m_Anim, b.m_Bones[b.m_PoseHips]);
     }
 
     int s_Lost = 0;
