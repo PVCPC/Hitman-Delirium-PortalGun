@@ -417,6 +417,126 @@ void PortalGun::OnDrawUI(bool p_HasFocus) {
     m_ScreenW = ImGui::GetIO().DisplaySize.x;
     m_ScreenH = ImGui::GetIO().DisplaySize.y;
     DrawViews();
+    DrawRims();
+}
+
+// The Playroom's portal rim (portal/surface.wesl): a burning band from 0.85 of the opening out to its edge, noise
+// tongues licking out, a soft glow past it; a new portal grows open over 0.5 s with its edge flashing. Drawn over the
+// screen (ImGui), as the see-through is.
+// ponytail: drawn over everything (no depth): a wall in front doesn't hide it; a real Glacier mesh would.
+void PortalGun::DrawRims() {
+    if (!m_PlayroomRims)
+        return;
+
+    const float s_Now = static_cast<float>(ImGui::GetTime());
+    bool s_Any = false;
+
+    for (int i = 0; i < 2; ++i) {
+        const Portal& p = i == 0 ? m_Blue : m_Orange;
+
+        if (!p.m_Placed) {
+            m_RimSince[i] = -1.f;
+            continue;
+        }
+
+        const SVector3 s_At = ToVec3(p.m_Transform.Trans);
+
+        if (m_RimSince[i] < 0.f || (s_At - m_RimAt[i]).Length() > 0.01f)
+            m_RimSince[i] = s_Now, m_RimAt[i] = s_At;
+
+        s_Any = true;
+    }
+
+    if (!s_Any)
+        return;
+
+    ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
+    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::Begin("##PortalRims", nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBackground |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNav);
+    ImDrawList* s_List = ImGui::GetWindowDrawList();
+    const ImVec2 s_White = ImGui::GetFontTexUvWhitePixel();
+
+    const auto s_Col = [](const SVector4& c, float k, float a) {
+        return ImGui::ColorConvertFloat4ToU32(ImVec4(std::min(1.f, c.x * k), std::min(1.f, c.y * k), std::min(1.f, c.z * k), a));
+    };
+
+    for (int i = 0; i < 2; ++i) {
+        const Portal& p = i == 0 ? m_Blue : m_Orange;
+
+        if (!p.m_Placed)
+            continue;
+
+        const SMatrix& s_M = p.m_Transform;
+        const SVector4& c = i == 0 ? c_BlueColor : c_OrangeColor;
+
+        // From in front only.
+        const auto s_Cam = Functions::GetCurrentCamera->Call();
+
+        if (!s_Cam || (ToVec3(s_Cam->GetObjectToWorldMatrix().Trans) - ToVec3(s_M.Trans)).Dot(ToVec3(s_M.YAxis)) <= 0.f)
+            continue;
+
+        const float t = std::clamp((s_Now - m_RimSince[i]) / 0.5f, 0.f, 1.f);
+        const float s_Grow = 1.f - (1.f - t) * (1.f - t) * (1.f - t);
+        const float s_Flash = 1.f + 1.5f * (1.f - t);
+
+        constexpr int c_Seg = 64;
+        // Rings out from the opening: radius (of the rim) and colour strength / alpha at each.
+        constexpr float c_R[] = {0.80f, 0.85f, 0.92f, 1.0f, 1.12f};
+        constexpr float c_K[] = {0.5f, 1.8f, 1.4f, 1.f, 1.f};
+        constexpr float c_A[] = {0.f, 0.95f, 0.8f, 0.45f, 0.f};
+        constexpr int c_Rings = 5;
+
+        ImVec2 s_P[c_Rings][c_Seg + 1];
+        bool s_Ok = true;
+
+        for (int k = 0; k <= c_Seg && s_Ok; ++k) {
+            const float a = 2.f * std::numbers::pi_v<float> * k / c_Seg;
+            float x = std::cos(a), z = std::sin(a);
+
+            if (g_Square) {
+                const float m = std::max(std::abs(x), std::abs(z));
+                x /= m, z /= m;
+            }
+
+            // Tongues: the outer rings flicker out by a moving noise.
+            const float s_Lick = 0.5f + 0.5f * std::sin(a * 7.f + s_Now * 5.3f) * std::sin(a * 3.f - s_Now * 3.1f + i);
+
+            for (int r = 0; r < c_Rings && s_Ok; ++r) {
+                const float s_R = (c_R[r] + (r >= 3 ? 0.06f * s_Lick : 0.f)) * s_Grow;
+                SVector2 s_S;
+                s_Ok = SDK()->WorldToScreen(
+                    ToVec3(s_M.WVectorTransform(float4(x * c_HalfWidth * s_R, 0.01f, z * c_HalfHeight * s_R, 1.f))), s_S);
+                s_P[r][k] = ImVec2(s_S.x, s_S.y);
+            }
+        }
+
+        if (!s_Ok)
+            continue;
+
+        for (int r = 0; r + 1 < c_Rings; ++r) {
+            const ImU32 s_In = s_Col(c, c_K[r] * s_Flash, c_A[r]);
+            const ImU32 s_Out = s_Col(c, c_K[r + 1] * s_Flash, c_A[r + 1]);
+            s_List->PrimReserve(c_Seg * 6, c_Seg * 4);
+
+            for (int k = 0; k < c_Seg; ++k) {
+                const ImDrawIdx b = static_cast<ImDrawIdx>(s_List->_VtxCurrentIdx);
+                s_List->PrimWriteVtx(s_P[r][k], s_White, s_In);
+                s_List->PrimWriteVtx(s_P[r][k + 1], s_White, s_In);
+                s_List->PrimWriteVtx(s_P[r + 1][k + 1], s_White, s_Out);
+                s_List->PrimWriteVtx(s_P[r + 1][k], s_White, s_Out);
+                s_List->PrimWriteIdx(b), s_List->PrimWriteIdx(b + 1), s_List->PrimWriteIdx(b + 2);
+                s_List->PrimWriteIdx(b), s_List->PrimWriteIdx(b + 2), s_List->PrimWriteIdx(b + 3);
+            }
+        }
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(2);
 }
 
 void PortalGun::DrawSetup(bool p_HasFocus) {
@@ -552,6 +672,7 @@ void PortalGun::DrawPortalTab() {
 
     if (ImGui::Checkbox("Rectangle portals", &g_Square))
         dp_set_rect(g_Square ? 1 : 0);
+    ImGui::Checkbox("Playroom portal rims", &m_PlayroomRims);
     ImGui::Checkbox("See-through portals", &m_SeeThrough);
     ImGui::SameLine();
     ImGui::Checkbox("Show portal cameras", &m_ShowCameras);
@@ -1322,8 +1443,10 @@ SVector3 PortalGun::MapDirection(const SVector3& p_Dir, const SMatrix& p_In, con
 
 void PortalGun::OnDraw3D(IRenderer* p_Renderer) {
     m_Delirium.Draw3D(p_Renderer);
-    DrawPortal(p_Renderer, m_Blue, c_BlueColor);
-    DrawPortal(p_Renderer, m_Orange, c_OrangeColor);
+    if (!m_PlayroomRims) {
+        DrawPortal(p_Renderer, m_Blue, c_BlueColor);
+        DrawPortal(p_Renderer, m_Orange, c_OrangeColor);
+    }
 }
 
 void PortalGun::DrawPortal(IRenderer* p_Renderer, const Portal& p_Portal, const SVector4& p_Color) {

@@ -150,6 +150,10 @@ private:
     void DeleteViews();
     void UpdateViews(const ZEntityRef& p_Hitman);
     void DrawViews();
+    void DrawRims();
+    bool m_PlayroomRims = true;
+    float m_RimSince[2] = {-1.f, -1.f};
+    SVector3 m_RimAt[2];
     PortalView m_Views[2];
     Delirium m_Delirium;
     float m_Volume = 0.3f;
