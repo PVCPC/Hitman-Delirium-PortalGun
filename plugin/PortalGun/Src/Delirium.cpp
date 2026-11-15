@@ -1728,6 +1728,26 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
             b.m_SpeedPrev = std::move(s_T);
             b.m_SpeedDt = 0.f;
+
+            float s_Worst = 0.f;
+            int s_WorstPart = 0;
+
+            for (int k = 1; k < c_Parts; ++k) {
+                float s_Ang[3];
+                const float s_Into = nm_agent_get_joint_angle(b.m_Agent, k, s_Ang);
+
+                if (s_Into > s_Worst)
+                    s_Worst = s_Into, s_WorstPart = k;
+            }
+
+            char s_Jn[32] = {};
+            nm_part_name(s_WorstPart, s_Jn, sizeof(s_Jn));
+
+            if (s_Worst > 1.2f)
+                Logger::Warn("[Delirium] {}: {} joint {:.2f} of its range (past the limit: map or bind for this NPC type).",
+                    b.m_Name, s_Jn, s_Worst);
+            else
+                Logger::Info("[Delirium] {}: worst joint {} at {:.2f} of its range.", b.m_Name, s_Jn, s_Worst);
         }
 
         b.m_SpeedDt += p_Dt;
