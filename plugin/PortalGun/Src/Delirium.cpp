@@ -676,6 +676,9 @@ int Delirium::Aimed() {
         NmAgent* a = Target(t, s_Name, s_Health, s_Body);
         float s_Point[3], s_Normal[3];
 
+        if (s_Body && !s_Body->m_Npc) // 47's own body (his shots started inside it and ragdolled him)
+            continue;
+
         if (a && nm_agent_raycast(a, s_From, s_To, s_Point, s_Normal) >= 0) {
             const float s_D = (V(s_Point) - m_Eye).Length();
 
