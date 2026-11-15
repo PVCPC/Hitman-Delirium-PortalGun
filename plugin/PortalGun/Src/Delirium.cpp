@@ -2098,7 +2098,7 @@ void Delirium::ShootAtAim(Body& b) {
         }
 
         if (!s_Hits.empty()) {
-            b.m_Health = std::max(0.f, b.m_Health - v[1]);
+            b.m_Health = std::max(0.f, b.m_Health - v[1] * (s_Hits.size() / 7)); // v[1] is one pellet's
             nm_agent_task_shotgun(b.m_Agent, m_World, s_Set, s_Hits.data(), static_cast<int>(s_Hits.size() / 7), b.m_Health, v[0]);
         }
     }
