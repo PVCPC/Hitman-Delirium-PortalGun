@@ -267,6 +267,20 @@ namespace {
         }
     }
 
+    // Which of a bone's axes runs along the line to its child, and how far off (the rest and the live pose should agree:
+    // a rest pose whose turns aren't the live pose's convention shows a different axis or angle).
+    std::string AlongAxis(const float* p_Bone, const float* p_Child) {
+        const SVector3 s_Line = (V(p_Child) - V(p_Bone)).Normalized();
+        std::string s;
+
+        for (int k = 0; k < 3; ++k) {
+            const SVector3 s_A = Rotate(p_Bone + 3, SVector3(k == 0, k == 1, k == 2));
+            s += std::format("{}{:+.2f} ", "XYZ"[k], s_A.Dot(s_Line));
+        }
+
+        return s;
+    }
+
     // An EngineFunction's address (its only member).
     void* AddressOf(const void* p_Function) { return p_Function ? *static_cast<void* const*>(p_Function) : nullptr; }
 
@@ -1457,7 +1471,8 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
             for (int k = 0; k < c_Parts; ++k)
                 s_J += std::format("{:.3f} {:.3f} {:.3f}, ", s_Joints[k * 3], s_Joints[k * 3 + 1], s_Joints[k * 3 + 2]);
 
-            Logger::Info("[Delirium] {}: bake check: {}joints fitted from: {}", p_Name, s_Arm, s_J);
+            Logger::Info("[Delirium] {}: bake check: {}rest upper-arm bone's axes along its line: {}; joints fitted from: {}",
+                p_Name, s_Arm, AlongAxis(&s_Rest[b.m_PartRig[14] * 7], &s_Rest[b.m_PartRig[15] * 7]), s_J);
         }
 
         // Pelican's check: the upper arm on the A-pose bind reads ~1.0 of its range; ~0.4 means the parts aren't on it.
@@ -1905,8 +1920,9 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             const Q s_D = Norm(Mul(Conj(s_Tq), Q {q[0], q[1], q[2], q[3]}));
             Logger::Info("[Delirium] {}: first keyframed frame: part 14 at ({:.3f} {:.3f} {:.3f}) rot ({:.3f} {:.3f} {:.3f} {:.3f}); "
                 "bone x bake offset gives ({:.3f} {:.3f} {:.3f}) rot ({:.3f} {:.3f} {:.3f} {:.3f}): {:.3f} m, {:.0f} deg apart "
-                "(the step may not have run yet).", b.m_Name, p[0], p[1], p[2], q[0], q[1], q[2], q[3], s_Tp.x, s_Tp.y, s_Tp.z,
-                s_Tq.x, s_Tq.y, s_Tq.z, s_Tq.w, (V(p) - s_Tp).Length(), 2.f * std::acos(std::min(1.f, std::abs(s_D.w))) * 57.2958f);
+                "(the step may not have run yet); live upper-arm bone's axes along its line: {}.", b.m_Name, p[0], p[1], p[2], q[0], q[1], q[2], q[3], s_Tp.x, s_Tp.y, s_Tp.z,
+                s_Tq.x, s_Tq.y, s_Tq.z, s_Tq.w, (V(p) - s_Tp).Length(), 2.f * std::acos(std::min(1.f, std::abs(s_D.w))) * 57.2958f,
+                b.m_PartRig[15] >= 0 ? AlongAxis(w, &b.m_Now[b.m_PartRig[15] * 7]) : std::string("?"));
         }
 
         if ((b.m_ArmCheck -= p_Dt) <= 0.f && b.m_PartRig[14] >= 0 && b.m_PartRig[15] >= 0) {
