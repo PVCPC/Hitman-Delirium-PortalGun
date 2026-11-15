@@ -35,6 +35,9 @@ namespace {
     constexpr int c_MaxNpcs = 6;
     constexpr int c_MaxMeshes = 32;
     constexpr float c_GetUp = 1.2f; // s from lying to the animation
+    // ponytail: a downed NPC's game capsule is lifted over 47's head so he walks over it; the game's own switch for
+    // character collision (not in the SDK) would be the real fix.
+    constexpr float c_CapsuleLift = 2.5f;
 
     SVector3 V(const float* p) { return SVector3(p[0], p[1], p[2]); }
 
@@ -133,25 +136,30 @@ namespace {
     // ponytail: a killed NPC gets the game's death ragdoll (skipping it crashed on the shot, null +8 in HITMAN3);
     // the dead body's look is then the game's, not NM's.
 
-    void HkRagdoll(ZHM5BaseCharacter* c, bool p_InMotion) {
-        bool s_Dead = false;
-        {
-            std::scoped_lock s_Lock(g_OwnedMutex);
-            s_Dead = g_OwnedNpcs.contains(c) && static_cast<ZActor*>(c)->IsDead();
-        }
+    std::unordered_set<void*> g_GameTook; // NPCs the game ragdolled itself (Delirium lets them go)
 
-        if (!Owned(c) || s_Dead)
+    bool GameRagdolls(void* c) {
+        std::scoped_lock s_Lock(g_OwnedMutex);
+
+        if (!g_OwnedNpcs.contains(c))
+            return !g_Owned.contains(c);
+
+        g_GameTook.insert(c);
+        return true;
+    }
+
+    bool GameTook(void* c) {
+        std::scoped_lock s_Lock(g_OwnedMutex);
+        return g_GameTook.erase(c) > 0;
+    }
+
+    void HkRagdoll(ZHM5BaseCharacter* c, bool p_InMotion) {
+        if (GameRagdolls(c))
             g_Ragdoll(c, p_InMotion);
     }
 
     void HkPowered(ZHM5BaseCharacter* c, float t, bool p_InMotion, bool p_Upper, float a5, bool a6) {
-        bool s_Dead = false;
-        {
-            std::scoped_lock s_Lock(g_OwnedMutex);
-            s_Dead = g_OwnedNpcs.contains(c) && static_cast<ZActor*>(c)->IsDead();
-        }
-
-        if (!Owned(c) || s_Dead)
+        if (GameRagdolls(c))
             g_Powered(c, t, p_InMotion, p_Upper, a5, a6);
     }
 
@@ -438,10 +446,56 @@ void Delirium::UpdateGround(const Ray& p_Ray) {
             }
         }
 
+        // The walls round it: level rays out at knee and chest height, a wall panel stood where each hits (none in an
+        // open portal: bodies go into it).
+        const float s_Floor = s_Last->second;
+
+        for (int k = 0; k < 16; ++k) {
+            const float s_Ang = k * 6.2831853f / 16.f;
+            const SVector3 s_Dir(std::cos(s_Ang), std::sin(s_Ang), 0.f);
+
+            for (const float s_H : {0.4f, 1.2f}) {
+                const SVector3 s_From(s_Pos[0], s_Pos[1], s_Floor + s_H);
+                SVector3 s_Hit, s_N;
+
+                if (!p_Ray(s_From, s_From + s_Dir * 2.5f, s_Hit, s_N))
+                    continue;
+
+                SVector3 n(s_N.x, s_N.y, 0.f);
+
+                if (n.Length() < 0.7f)
+                    continue;
+
+                n = n.Normalized();
+                bool s_Hole = false;
+
+                if (m_PortalsOpen)
+                    for (const DpFrame& f : m_Portals) {
+                        const float s_Behind[3] = {s_Hit.x - n.x * 0.05f, s_Hit.y - n.y * 0.05f, s_Hit.z};
+                        s_Hole = s_Hole || dp_crossed(&f, 1.f, &s_Behind);
+                    }
+
+                if (s_Hole)
+                    continue;
+
+                const SVector3 s_Side(-n.y, n.x, 0.f);
+                const uint32_t s_Base = static_cast<uint32_t>(s_Verts.size() / 3);
+
+                for (const auto [sx, sz] : {std::pair {-0.4f, -0.3f}, {0.4f, -0.3f}, {0.4f, 2.2f}, {-0.4f, 2.2f}}) {
+                    const SVector3 v = s_Hit + s_Side * sx;
+                    s_Verts.insert(s_Verts.end(), {v.x, v.y, s_Floor + sz});
+                }
+
+                // Both faces (whichever way NM takes a triangle's front).
+                s_Tris.insert(s_Tris.end(), {s_Base, s_Base + 1, s_Base + 2, s_Base, s_Base + 2, s_Base + 3, s_Base, s_Base + 2,
+                    s_Base + 1, s_Base, s_Base + 3, s_Base + 2});
+            }
+        }
+
         if (s_Tris.empty())
             s_Tris = {0, 1, 2};
 
-        nm_world_set_mesh(m_World, static_cast<int>(p), s_Verts.data(), c_N * c_N, s_Tris.data(),
+        nm_world_set_mesh(m_World, static_cast<int>(p), s_Verts.data(), static_cast<int>(s_Verts.size() / 3), s_Tris.data(),
             static_cast<int>(s_Tris.size() / 3), nullptr);
     }
 }
@@ -1050,6 +1104,19 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
     else {
         // Back on his animation from where it is now, blended from the ragdoll's last pose (the get-up).
         Bones::Override(b->m_Anim, {});
+
+        if (b->m_Npc) {
+            float s_Pos[3], s_Rot[4];
+            nm_agent_get_part_transform(b->m_Agent, 0, s_Pos, s_Rot);
+            SMatrix s_M = b->m_HeldRot;
+            s_M.Trans.x = s_Pos[0];
+            s_M.Trans.y = s_Pos[1];
+            const auto s_G = m_LastGround.find(b->m_Agent);
+            s_M.Trans.z = s_G != m_LastGround.end() ? s_G->second : b->m_HeldZ;
+            b->m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
+            b->m_Written.clear();
+        }
+
         b->m_Blend = b->m_Written.empty() ? 0.f : c_GetUp;
 
         if (!b->m_Now.empty())
@@ -1160,6 +1227,16 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     const SVector3& p_Feet, const SVector3& p_Facing, ZHM5BaseCharacter* p_Hitman, ZSpatialEntity* p_HitmanSpatial) {
     m_Eye = p_Eye;
     m_Aim = p_Aim;
+    Bones::Tick();
+
+    std::erase_if(m_Bodies, [&](Body& b) {
+        if (!b.m_Npc || !GameTook(b.m_Char))
+            return false;
+
+        Logger::Info("[Delirium] {}: the game ragdolled it (shot or killed); Delirium lets it go.", b.m_Name);
+        Detach(b);
+        return true;
+    });
 
     // Numpad 1: Delirium on NPCs. Numpad 2: 47 ragdolls. Numpad 5 / 6: shoot / push the body you aim at.
     static bool s_K1, s_K2, s_K5, s_K6;
@@ -1463,7 +1540,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             SMatrix s_M = b.m_HeldRot;
             s_M.Trans.x = s_Pos[0];
             s_M.Trans.y = s_Pos[1];
-            s_M.Trans.z = b.m_HeldZ;
+            s_M.Trans.z = b.m_HeldZ + (b.m_Npc ? c_CapsuleLift : 0.f);
             b.m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
         }
     }

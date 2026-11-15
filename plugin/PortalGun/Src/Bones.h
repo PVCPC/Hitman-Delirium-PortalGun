@@ -28,6 +28,9 @@ namespace Bones {
     // Its last animated pose (before any override), false before the game has posed it.
     bool Read(void* p_Animator, std::vector<SQV>& p_Local);
 
+    // A new game frame (passes are counted per frame).
+    void Tick();
+
     // Its bones' parents (-1 for the first), checked; empty if they can't be found.
     std::vector<int32_t> Parents(void* p_Animator, int p_Bones);
 

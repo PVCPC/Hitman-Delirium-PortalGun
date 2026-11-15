@@ -15,18 +15,18 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 6 | NPC models twist and contort around their Homer body | built: bodies fitted on the bind pose, not the walking frame (a bent elbow made a bent-armed body) |
 | 7 | NPC Homers hover above their bodies, shake violently | built: ground rays ignore characters; NM stepped every frame |
 | 8 | NPCs fly into the sky when touched or ragdolled | built: standing NPCs no longer collide with other bodies (nm_agent_collide_agents) |
-| 9 | Bumping an NPC: 47 gets stuck on peds like vanilla instead of shoving through like GTA IV | built: bump from 0.95 m at 0.6 m/s (Hitman's capsules stopped him before 0.6 m). Fallen NPC's capsule still blocks, open |
+| 9 | 47 snags on peds, standing or downed | built: bump from 0.95 m; a downed ped's game capsule is lifted over his head while it lies |
 | 10 | Female NPCs use Wilma | built |
 | 11 | Holding objects or guns while ragdolled | open: plan is to drop the item when he goes down |
 | 22 | Ragdolls have no behaviours (fall over limp, no balance / catch fall / high fall) | built: balance on every knock-down (unlimited steps, Playroom default), high fall past 6 m/s, shots keep their own reactions |
-| 23 | Knocked-over NPC fell through the map | built: a missed ground ray kept the ground 1 m under the body each update; now keeps the last ground |
+| 23 | Pushed peds fall through the map / through walls | map: confirmed fixed. Walls: built, wall panels in NM's world around each body (none in an open portal) |
 | 24 | 47's arms match less while running / walking with the gun | open: the gun's aim layer likely moves the arms after the pose we read |
 
 ## Portals
 
 | # | Issue | Status |
 |---|---|---|
-| 12 | Portals teleport instead of a smooth walk-through like the Playroom; walking in flung him back out | built: ragdoll dive removed (it never crossed); walk-in teleports again; ragdolls still cross by the Playroom transit |
+| 12 | Walking through portals | confirmed: Billy walks through |
 | 13 | Half in, half out of a portal (Playroom ghosts) | open: Hitman's mesh is one piece; needs a second copy or clip planes |
 | 14 | Portals see-through (cameras render now, way too bright) | built: tablet behind each portal's wall; camera no longer a UI camera (exposure). Untested |
 | 15 | Portals too loud | built: volume slider, 0.3 by default |
@@ -38,8 +38,8 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 28 | Portal 2 lets you clip the portal edges when walking in | built: trigger reaches 25 cm past the rim |
 | 29 | Square / rectangle portals; still the old October rings | open |
 | 30 | Shooting a portal froze 47 in place | built: the camera tablet sat in his chest and caught him; moved behind the portal |
-| 31 | Shooting a ragdolled NPC crashed the game | built: a killed NPC gets the game's death ragdoll again (skipping it read a null in HITMAN3) |
-| 32 | 47's upper Homer twitches more, stomach sticks out | open |
+| 31 | Shooting a ped crashes the game (still, after the first fix) | built: the game's ragdoll is never blocked on NPCs now (its death code walked an empty list, HITMAN3+0x10c3bc4); a ped the game ragdolls is let go by Delirium |
+| 32 | Everyone's upper Homer twitches rapidly and violently; nobody's arms line up; peds twist around their Homer | built: UpdateBones runs several passes a frame (base, upper body / aim); we read whichever ran last, which flipped frame to frame. Now always the same (last) pass; the log names each pass's bones |
 
 ## Trainer and menu
 

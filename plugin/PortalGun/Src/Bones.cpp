@@ -12,11 +12,22 @@
 #include <mutex>
 #include <format>
 #include <unordered_map>
+#include <atomic>
+#include <Logging.h>
 
 namespace {
     using UpdateFn = void(*)(void*, const void*, uint8_t*, const void*, void*, void*, void*);
 
+    std::atomic<uint64_t> g_Frame {0};
+
     struct State {
+        // UpdateBones runs more than once a frame for a character (the base, then upper-body / aim passes). Each
+        // pass by its order in the frame; m_Anim is always the same pass (the last one), never whichever ran last.
+        std::vector<std::vector<Bones::SQV>> m_Passes;
+        uint64_t m_Frame = 0;
+        int m_Count = 0;     // passes so far this frame
+        int m_LastCount = 0; // passes last frame
+        int m_Logged = -1;
         std::vector<Bones::SQV> m_Anim;
         std::vector<Bones::SQV> m_Override;
         float m_World[16] = {};
@@ -97,10 +108,57 @@ namespace {
         if (it == g_States.end())
             return;
 
-        it->second.m_Anim.assign(s_Bones, s_Bones + n);
+        State& st = it->second;
 
-        if (p_World)
-            it->second.m_HasWorld = CopyWorld(p_World, it->second.m_World);
+        if (st.m_Frame != g_Frame) {
+            st.m_Frame = g_Frame;
+
+            if (st.m_Count > 0)
+                st.m_LastCount = st.m_Count;
+
+            st.m_Count = 0;
+        }
+
+        const int s_Pass = st.m_Count++;
+
+        if (st.m_Passes.size() <= static_cast<size_t>(s_Pass))
+            st.m_Passes.resize(s_Pass + 1);
+
+        st.m_Passes[s_Pass].assign(s_Bones, s_Bones + n);
+
+        // Which passes there are, once per change: how many bones each later pass turns off the first.
+        if (st.m_LastCount != st.m_Logged && st.m_LastCount > 0 && s_Pass == st.m_LastCount - 1) {
+            st.m_Logged = st.m_LastCount;
+            std::string s_Diff;
+
+            for (int k = 1; k < st.m_LastCount && k < static_cast<int>(st.m_Passes.size()); ++k) {
+                int s_Off = 0;
+                std::string s_Which;
+
+                for (uint32_t i = 0; i < n && i < st.m_Passes[0].size() && i < st.m_Passes[k].size(); ++i) {
+                    const float* a = st.m_Passes[0][i].q;
+                    const float* b = st.m_Passes[k][i].q;
+
+                    if (std::abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]) < 0.996f) { // ~10 degrees
+                        if (++s_Off <= 12)
+                            s_Which += std::format("{} ", i);
+                    }
+                }
+
+                s_Diff += std::format("pass {}: {} bones off pass 0 ({}); ", k, s_Off, s_Which);
+            }
+
+            Logger::Info("[Bones] {}: {} UpdateBones passes a frame. {}", p_This, st.m_LastCount, s_Diff);
+        }
+
+        const int s_Use = st.m_LastCount > 0 ? st.m_LastCount - 1 : 0;
+
+        if (s_Pass == s_Use || st.m_Anim.size() != n) {
+            st.m_Anim.assign(s_Bones, s_Bones + n);
+
+            if (p_World)
+                st.m_HasWorld = CopyWorld(p_World, st.m_World);
+        }
 
         if (it->second.m_Override.size() != n)
             return;
@@ -168,6 +226,10 @@ void* Bones::Animator(ZHM5BaseCharacter* p_Character) {
 
 void* Bones::HitmanAnimator(ZHitman5* p_Hitman) {
     return p_Hitman && p_Hitman->m_Animator ? Track(p_Hitman->m_Animator.QueryInterface<IBoneAnimator>()) : nullptr;
+}
+
+void Bones::Tick() {
+    ++g_Frame;
 }
 
 bool Bones::Read(void* p_Animator, std::vector<SQV>& p_Local) {
