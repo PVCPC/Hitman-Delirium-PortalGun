@@ -466,6 +466,22 @@ void Delirium::UpdateGround(const Ray& p_Ray) {
                 if (n.Length() < 0.7f)
                     continue;
 
+                bool s_NearSomeone = false;
+
+                for (const Body& o : m_Bodies) {
+                    if (o.m_Now.size() < 3)
+                        continue;
+
+                    const float dx = o.m_Now[0] - s_Hit.x, dy = o.m_Now[1] - s_Hit.y;
+                    float s_P[3], s_R[4];
+                    nm_agent_get_part_transform(o.m_Agent, 0, s_P, s_R);
+                    const float ex = s_P[0] - s_Hit.x, ey = s_P[1] - s_Hit.y;
+                    s_NearSomeone = s_NearSomeone || dx * dx + dy * dy < 0.8f * 0.8f || ex * ex + ey * ey < 0.8f * 0.8f;
+                }
+
+                if (s_NearSomeone)
+                    continue;
+
                 n = n.Normalized();
                 bool s_Hole = false;
 
@@ -874,6 +890,24 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         }
     }
 
+    if (!p_Npc) {
+        std::string s_Map;
+
+        for (int s_Part = 0; s_Part < c_Parts; ++s_Part) {
+            char s_Pn[64] = {};
+            nm_part_name(s_Part, s_Pn, sizeof(s_Pn));
+            s_Map += std::format("{}:", s_Pn);
+
+            for (int i = 0; i < n; ++i)
+                if (nm_rig_part_for_name(s_Names[i].c_str()) == s_Part && s_Part != 0)
+                    s_Map += std::format(" {}", s_Names[i]);
+
+            s_Map += "; ";
+        }
+
+        Logger::Info("[Delirium] 47's parts: {}", s_Map);
+    }
+
     // Which bones drive the neck (11) and head (12): only neck/neck1 and head should.
     {
         std::string s_Heads;
@@ -1187,8 +1221,40 @@ void Delirium::Snapshot() {
     const auto s_Add = [&](NmAgent* a) {
         s_Pose.emplace_back(a ? c_Parts * 7 : 0);
 
-        if (a)
-            nm_agent_get_part_transforms(a, s_Pose.back().data(), c_Parts);
+        if (!a)
+            return;
+
+        auto& [s_Prev, s_Cur] = m_DrawPose[a];
+
+        if (m_Stepped || s_Cur.size() != c_Parts * 7) {
+            s_Prev = s_Cur;
+            s_Cur.resize(c_Parts * 7);
+            nm_agent_get_part_transforms(a, s_Cur.data(), c_Parts);
+        }
+
+        std::vector<float>& o = s_Pose.back();
+        o = s_Cur;
+
+        if (s_Prev.size() != o.size())
+            return;
+
+        const float t = m_Alpha;
+
+        for (int i = 0; i < c_Parts; ++i) {
+            float* c = &o[i * 7];
+            const float* p = &s_Prev[i * 7];
+
+            if ((V(c) - V(p)).Length() > 1.f) // through a portal: no smear
+                continue;
+
+            for (int k = 0; k < 3; ++k)
+                c[k] = p[k] + (c[k] - p[k]) * t;
+
+            const float s = p[3] * c[3] + p[4] * c[4] + p[5] * c[5] + p[6] * c[6] < 0.f ? -1.f : 1.f;
+            const Q m = Norm(Q {p[3] + (c[3] * s - p[3]) * t, p[4] + (c[4] * s - p[4]) * t, p[5] + (c[5] * s - p[5]) * t,
+                p[6] + (c[6] * s - p[6]) * t});
+            c[3] = m.x, c[4] = m.y, c[5] = m.z, c[6] = m.w;
+        }
     };
 
     // In target order: 47, the peds, the NPCs.

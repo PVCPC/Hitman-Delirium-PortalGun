@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <atomic>
 #include <Logging.h>
+#include "PortalLog.h"
 
 namespace {
     using UpdateFn = void(*)(void*, const void*, uint8_t*, const void*, void*, void*, void*);

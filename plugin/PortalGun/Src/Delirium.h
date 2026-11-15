@@ -155,6 +155,7 @@ private:
     float m_Accum = 0.f; // time toward the next 1/60 step
     float m_Alpha = 0.f; // how far into it (drawing between steps)
     bool m_Stepped = false;
+    std::unordered_map<NmAgent*, std::pair<std::vector<float>, std::vector<float>>> m_DrawPose; // last two steps, for drawing
     std::unordered_map<NmAgent*, float> m_LastGround; // the last ground under each body
     float m_GroundTimer = 0.f;
 };
