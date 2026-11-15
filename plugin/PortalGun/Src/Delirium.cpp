@@ -1067,6 +1067,30 @@ namespace {
         }
     }
 
+    // Hitman's own ragdoll recovery (HITMAN3+0x3b82f0, called with ZActor::m_pAnimatedActor by the unconscious and
+    // knocked-down behaviours): powered ragdoll, picks Impacts|*_GetUp_Back/Stomake/LeftSide/RightSide from the
+    // ragdoll's lie, plays it, ends at its eDE_RecoveryBlendEnd. Checked by its first bytes; false = not this build.
+    bool StartRecovery(ZHM5BaseCharacter* c) {
+        static constexpr uint8_t c_Head[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x40, 0x48, 0x8b, 0x79, 0x50};
+        const auto s_Fn = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr)) + 0x3b82f0;
+
+        if (std::memcmp(s_Fn, c_Head, sizeof(c_Head)))
+            return false;
+
+        __try {
+            void* s_Animated = static_cast<ZActor*>(c)->m_pAnimatedActor;
+
+            if (!s_Animated || !*reinterpret_cast<void**>(static_cast<uint8_t*>(s_Animated) + 0x50))
+                return false;
+
+            reinterpret_cast<void (*)(void*)>(s_Fn)(s_Animated);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
     // An object's class (its RTTI name), for the log and the check.
     const char* ClassOf(void* p_Object) {
         __try {
@@ -1649,7 +1673,12 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
             for (int i = 0, n = ReadRagdoll(b->m_Char, &s_Set, s_Bodies, s_Bones); i < n; ++i)
                 SetKinematic(s_Bodies[i], false);
 
-            if (Functions::ZHM5BaseCharacter_DeactivateRagdoll)
+            // Hitman's own get-up from where its ragdoll lies (on NM's body); no clip: just off.
+            if (StartRecovery(b->m_Char)) {
+                b->m_Recover = 6.f;
+                Logger::Info("[Delirium] {}: Hitman's get-up.", b->m_Name);
+            }
+            else if (Functions::ZHM5BaseCharacter_DeactivateRagdoll)
                 Functions::ZHM5BaseCharacter_DeactivateRagdoll->Call(b->m_Char);
 
             b->m_Follow = false;
@@ -1683,7 +1712,9 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
             const size_t n = b->m_Bones.size();
             const int s_H = b->m_PoseHips;
 
-            if (s_H >= 0 && s_H < static_cast<int>(n) && b->m_PoseB.size() == n * 4 + 3 &&
+            if (b->m_Recover > 0.f)
+                b->m_Written.clear();
+            else if (s_H >= 0 && s_H < static_cast<int>(n) && b->m_PoseB.size() == n * 4 + 3 &&
                 b->m_Written.size() == b->m_Local.size()) {
                 std::vector<float> s_W;
                 Fk(b->m_Local, b->m_Parents, FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis),
@@ -1871,9 +1902,25 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     m_Aim = p_Aim;
     Bones::Tick();
 
+    // Hitman's get-up runs on its powered ragdoll: that isn't a kill (unless it died meanwhile).
+    for (Body& b : m_Bodies)
+        if (b.m_Recover > 0.f) {
+            GameTook(b.m_Char);
+            const bool s_On = GameRagdollOn(b.m_Char);
+
+            if ((b.m_Recover -= p_Dt) <= 0.f || !s_On || b.m_Ragdoll || static_cast<ZActor*>(b.m_Char)->IsDead()) {
+                if (s_On && !b.m_Ragdoll && !static_cast<ZActor*>(b.m_Char)->IsDead() && Functions::ZHM5BaseCharacter_DeactivateRagdoll)
+                    Functions::ZHM5BaseCharacter_DeactivateRagdoll->Call(b.m_Char);
+
+                Logger::Info("[Delirium] {}: up ({}).", b.m_Name, s_On ? "timed out" : "Hitman's get-up done");
+                b.m_Recover = 0.f;
+            }
+        }
+
     // A kill: the game's death ragdoll runs (blocking it crashed), its bodies then follow NM's (Follow).
     for (Body& b : m_Bodies)
-        if (b.m_Npc && !b.m_Follow && (GameTook(b.m_Char) || GameRagdollOn(b.m_Char))) {
+        if (b.m_Npc && !b.m_Follow && (b.m_Recover <= 0.f || static_cast<ZActor*>(b.m_Char)->IsDead()) &&
+            (GameTook(b.m_Char) || GameRagdollOn(b.m_Char))) {
             Logger::Info("[Delirium] {}: the game ragdolled it (killed); its ragdoll follows Delirium's body.", b.m_Name);
             b.m_Follow = true;
             b.m_RigAtKill = b.m_RigWorld; // last frame's: what the mesh showed as the ragdoll was made
