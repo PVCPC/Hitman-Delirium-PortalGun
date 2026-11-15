@@ -38,6 +38,8 @@
 #include "PortalViewJson.h"
 #include "Sfx.h"
 #include "Bones.h"
+
+static const Delirium* g_RayBodies = nullptr; // set while Delirium updates (RayCast is static)
 #define Logger PortalLog
 
 namespace {
@@ -846,6 +848,7 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
     if (const auto s_Camera = Functions::GetCurrentCamera->Call()) {
         const SMatrix s_Cam = s_Camera->GetObjectToWorldMatrix();
         const ZEntityRef s_Me = s_LocalHitman.m_entityRef;
+        g_RayBodies = &m_Delirium;
         m_Delirium.Update(
             s_Dt,
             [&](const SVector3& p_From, const SVector3& p_To, SVector3& p_Hit, SVector3& p_Normal) {
@@ -1124,6 +1127,9 @@ bool PortalGun::RayCast(
 
         if (!s_Ignored && g_LevelOnly && s_Output.m_pBlockingSpatialEntity.m_pInterfaceRef)
             s_Ignored = IsCharacter(s_Output.m_pBlockingSpatialEntity.m_entityRef, ToVec3(s_Output.m_vPosition));
+
+        if (!s_Ignored && g_LevelOnly)
+            s_Ignored = g_RayBodies && g_RayBodies->BodyAt(ToVec3(s_Output.m_vPosition));
 
         if (!s_Ignored) {
             p_Hit = ToVec3(s_Output.m_vPosition);

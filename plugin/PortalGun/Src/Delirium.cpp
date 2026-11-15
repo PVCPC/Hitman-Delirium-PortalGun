@@ -412,6 +412,25 @@ bool Delirium::Start() {
     return true;
 }
 
+// The game's ragdoll bodies are moved onto each downed NPC's NM body: a ground ray that hits them laid NM's ground on
+// the body itself, which threw it up and dropped it again every scan ("flying up and down").
+bool Delirium::BodyAt(const SVector3& p_At) const {
+    for (const Body& b : m_Bodies) {
+        if (!b.m_Follow || !b.m_Agent)
+            continue;
+
+        for (int k = 0; k < c_Parts; ++k) {
+            float p[3], q[4];
+            nm_agent_get_part_transform(b.m_Agent, k, p, q);
+
+            if ((V(p) - p_At).Length() < 0.4f)
+                return true;
+        }
+    }
+
+    return false;
+}
+
 void Delirium::Clear() {
     for (Ped& s_Ped : m_Peds)
         nm_agent_destroy(s_Ped.m_Agent);

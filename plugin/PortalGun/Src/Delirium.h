@@ -41,6 +41,7 @@ public:
     void Draw3D(IRenderer* p_Renderer);
     void DrawMenu();
     void Clear();
+    bool BodyAt(const SVector3& p_At) const; // a point on a downed NPC (its game ragdoll's bodies sit on its NM body)
     // The linked pair (null: not both open), for ragdolls going through and the holes in the ground.
     void SetPortals(const DpFrame* p_Frames);
 
