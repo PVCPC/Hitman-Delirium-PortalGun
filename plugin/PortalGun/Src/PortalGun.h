@@ -65,7 +65,9 @@ private:
     void OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent);
 
     void PlacePortalInFrontOfPlayer(Portal& p_Portal, const SMatrix& p_PlayerTrans);
-    bool ShootPortal(Portal& p_Portal, const Portal& p_Other, const ZEntityRef& p_Hitman);
+    // From the camera, or from p_Origin along p_Aim (the self-test). p_Result: dp_shoot's answer.
+    bool ShootPortal(Portal& p_Portal, const Portal& p_Other, const ZEntityRef& p_Hitman, const SVector3* p_Origin = nullptr,
+        const SVector3* p_Aim = nullptr, int* p_Result = nullptr);
     bool TryTeleport(Portal& p_In, Portal& p_Out, ZSpatialEntity* p_Hitman, const SMatrix& p_PlayerTrans);
     void ClearPortals();
     void StartFlight(const SVector3& p_Feet, const SVector3& p_Vel);
@@ -84,7 +86,7 @@ private:
 
     // Pick-up, hold and drop, and physics objects through portals.
     void UpdatePickup(const ZEntityRef& p_Hitman, float p_Dt);
-    void TryGrab(const ZEntityRef& p_Hitman);
+    void TryGrab(const ZEntityRef& p_Hitman, const SVector3* p_Origin = nullptr, const SVector3* p_Aim = nullptr);
     void Release();
     void UpdateBodies(float p_Dt);
     void SpawnCube(const SMatrix& p_PlayerTrans);
@@ -133,10 +135,12 @@ private:
     int m_TeleportCount = 0;
 
     // Automated self-test, enabled by a PortalGun.selftest file next to the DLL.
-    enum class SelfTestStage { Off, Waiting, Setup, Arm, Cross, Verify, Done };
+    enum class SelfTestStage { Off, Waiting, Setup, Arm, Cross, Verify, Shoot, CubeGrab, CubeHold, CubeDrop, Done };
     SelfTestStage m_SelfTest = SelfTestStage::Off;
     float m_SelfTestTimer = 0.f;
     int m_SelfTestFrames = 0;
+    ZEntityRef m_SelfTestCube;
+    float m_SelfTestCubeZ = 0.f;
     // 1 = wall portal walk-in, 2 = floor portal step-in.
     int m_SelfTestPhase = 1;
     int m_SelfTestPasses = 0;

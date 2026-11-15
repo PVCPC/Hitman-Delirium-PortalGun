@@ -948,16 +948,18 @@ SMatrix PortalGun::MakeSurfaceFrame(const SVector3& p_Hit, const SVector3& p_Nor
     );
 }
 
-bool PortalGun::ShootPortal(Portal& p_Portal, const Portal& p_Other, const ZEntityRef& p_Hitman) {
+bool PortalGun::ShootPortal(
+    Portal& p_Portal, const Portal& p_Other, const ZEntityRef& p_Hitman, const SVector3* p_Origin, const SVector3* p_Aim,
+    int* p_Result
+) {
     const auto s_Camera = Functions::GetCurrentCamera->Call();
 
-    if (!s_Camera)
+    if (!s_Camera && !p_Origin)
         return false;
 
     // Camera looks down its -Z axis.
-    const SMatrix s_CameraTrans = s_Camera->GetObjectToWorldMatrix();
-    SVector3 s_Origin = ToVec3(s_CameraTrans.Trans);
-    const SVector3 s_Aim = (ToVec3(s_CameraTrans.CameraBackward) * -1.f).Normalized();
+    SVector3 s_Origin = p_Origin ? *p_Origin : ToVec3(s_Camera->GetObjectToWorldMatrix().Trans);
+    const SVector3 s_Aim = p_Aim ? p_Aim->Normalized() : (ToVec3(s_Camera->GetObjectToWorldMatrix().CameraBackward) * -1.f).Normalized();
 
     // Sometimes the camera reports its position as the world origin. Shoot from 47's head instead.
     if (s_Origin.Length() < 0.01f) {
@@ -985,6 +987,9 @@ bool PortalGun::ShootPortal(Portal& p_Portal, const Portal& p_Other, const ZEnti
         &DpRayCast, &s_Ignore, &s_From, &s_Dir, c_MaxRange, p_Other.m_Placed ? &s_Other : nullptr,
         s_BothOpen ? s_Linked : nullptr, &s_Out, &s_ShotHit
     );
+
+    if (p_Result)
+        *p_Result = s_Result;
 
     if (s_Result != 0) {
         Logger::Info(
@@ -1354,11 +1359,145 @@ void PortalGun::RunSelfTest(ZSpatialEntity* p_Hitman, const SMatrix& p_PlayerTra
                         m_SelfTest = SelfTestStage::Setup;
                     }
                     else {
-                        m_SelfTest = SelfTestStage::Done;
-                        SelfTestLog(std::format("SUMMARY: {}/3 passed, 47 restored", m_SelfTestPasses));
+                        m_SelfTest = SelfTestStage::Shoot;
                     }
                 }
             }
+            return;
+        }
+
+        case SelfTestStage::Shoot: {
+            // Shots from 47's head through Portal 2's placement rules (the real ShootPortal, aimed by the test).
+            const ZEntityRef s_HitmanRef = SDK()->GetLocalPlayer().m_entityRef;
+            const SVector3 s_Head = s_Feet + s_Up * 1.6f;
+
+            // A wall: the nearest upright surface 1.5-15 m away in eight directions.
+            SVector3 s_WallDir(1.f, 0.f, 0.f);
+            float s_WallDist = 0.f;
+
+            for (int i = 0; i < 8; ++i) {
+                const float s_A = i * std::numbers::pi_v<float> * 0.25f;
+                const SVector3 s_Dir(std::cos(s_A), std::sin(s_A), 0.f);
+                SVector3 s_Hit, s_Normal;
+
+                if (!RayCast(s_Head, s_Head + s_Dir * 15.f, s_HitmanRef, s_Hit, s_Normal) || std::abs(s_Normal.z) > 0.3f)
+                    continue;
+
+                const float s_D = (s_Hit - s_Head).Length();
+
+                if (s_D > 1.5f && (s_WallDist == 0.f || s_D < s_WallDist)) {
+                    s_WallDist = s_D;
+                    s_WallDir = s_Dir;
+                }
+            }
+
+            const auto s_Shot = [&](const char* p_Name, Portal& p_Portal, const Portal& p_Other, const SVector3& p_Aim) {
+                int s_Result = -1;
+                const bool s_Ok = ShootPortal(p_Portal, p_Other, s_HitmanRef, &s_Head, &p_Aim, &s_Result);
+                const SVector3 s_At = ToVec3(p_Portal.m_Transform.Trans);
+                const SVector3 s_N = ToVec3(p_Portal.m_Transform.YAxis);
+                SelfTestLog(std::format(
+                    "shot {}: result={} at=({:.2f}, {:.2f}, {:.2f}) normal=({:.2f}, {:.2f}, {:.2f})", p_Name, s_Result,
+                    s_At.x, s_At.y, s_At.z, s_N.x, s_N.y, s_N.z
+                ));
+                return std::make_tuple(s_Ok, s_Result, s_At, s_N);
+            };
+
+            const auto s_Result = [&](const char* p_Name, bool p_Pass) {
+                SelfTestLog(std::format("{} RESULT: {}", p_Name, p_Pass ? "PASS" : "FAIL"));
+                m_SelfTestPasses += p_Pass ? 1 : 0;
+            };
+
+            ClearPortals();
+
+            if (s_WallDist == 0.f) {
+                SelfTestLog("shot wall: no wall within 15 m, skipped (counts as FAIL)");
+            }
+            else {
+                const auto [s_Ok, s_R, s_At, s_N] = s_Shot("wall", m_Blue, m_Orange, s_WallDir);
+                // On the wall's plane, facing 47.
+                s_Result("shot wall", s_Ok && std::abs(s_N.z) < 0.3f && s_N.Dot(s_WallDir) < -0.7f &&
+                    std::abs((s_At - s_Head).Dot(s_WallDir) - s_WallDist) < 0.3f);
+
+                // The same spot for orange: Portal 2 refuses a portal overlapping the other.
+                Portal s_Second;
+                const auto [s_Ok2, s_R2, s_At2, s_N2] = s_Shot("overlap", s_Second, m_Blue, s_WallDir);
+                s_Result("shot overlap refused", !s_Ok2 && s_R2 == 3);
+            }
+
+            // The floor 3 m away, the other way from the wall.
+            const SVector3 s_FloorAim = s_Feet - s_WallDir * 3.f - s_Head;
+            const auto [s_FOk, s_FR, s_FAt, s_FN] = s_Shot("floor", m_Orange, m_Blue, s_FloorAim);
+            s_Result("shot floor", s_FOk && s_FN.z > 0.9f && std::abs(s_FAt.z - s_Feet.z) < 0.3f);
+
+            ClearPortals();
+
+            // A cube dropped 1.5 m in front of 47, for the pick-up test.
+            SpawnCube(m_SelfTestStart);
+            m_SelfTestTimer = 0.f;
+            m_SelfTest = SelfTestStage::CubeGrab;
+            return;
+        }
+
+        case SelfTestStage::CubeGrab: {
+            m_SelfTestTimer += p_Dt;
+
+            if (m_SelfTestTimer < 3.f)
+                return;
+
+            const ZEntityRef s_HitmanRef = SDK()->GetLocalPlayer().m_entityRef;
+            const SVector3 s_Head = s_Feet + s_Up * 1.6f;
+            const SVector3 s_Cube = s_Feet + ToVec3(m_SelfTestStart.YAxis).Normalized() * 1.5f + s_Up * 0.3f;
+            const SVector3 s_Aim = s_Cube - s_Head;
+            TryGrab(s_HitmanRef, &s_Head, &s_Aim);
+
+            const bool s_Pass = static_cast<bool>(m_Held);
+            SelfTestLog(std::format("cube grab RESULT: {}", s_Pass ? "PASS" : "FAIL"));
+            m_SelfTestPasses += s_Pass ? 1 : 0;
+
+            if (!s_Pass) {
+                m_SelfTest = SelfTestStage::Done;
+                SelfTestLog(std::format("SUMMARY: {}/9 passed, 47 restored", m_SelfTestPasses));
+                return;
+            }
+
+            m_SelfTestCube = m_Held;
+            m_SelfTestFrames = 0;
+            m_SelfTest = SelfTestStage::CubeHold;
+            return;
+        }
+
+        case SelfTestStage::CubeHold: {
+            if (++m_SelfTestFrames < 60)
+                return;
+
+            const auto s_Body = GetBody(m_SelfTestCube);
+            const float s_Z = s_Body ? s_Body->m_pPhysicsObject->GetTransform().Trans.z : 0.f;
+            // Held up in front of him, well off the floor.
+            const bool s_Pass = s_Body && m_Held && s_Z > s_Feet.z + 0.6f;
+            SelfTestLog(std::format("cube hold: z={:.2f} (feet {:.2f}) RESULT: {}", s_Z, s_Feet.z, s_Pass ? "PASS" : "FAIL"));
+            m_SelfTestPasses += s_Pass ? 1 : 0;
+
+            Release();
+            m_SelfTestCubeZ = s_Z;
+            m_SelfTestFrames = 0;
+            m_SelfTest = SelfTestStage::CubeDrop;
+            return;
+        }
+
+        case SelfTestStage::CubeDrop: {
+            if (++m_SelfTestFrames < 90)
+                return;
+
+            const auto s_Body = GetBody(m_SelfTestCube);
+            const float s_Z = s_Body ? s_Body->m_pPhysicsObject->GetTransform().Trans.z : 0.f;
+            // Let go, it falls.
+            const bool s_Pass = s_Body && !m_Held && s_Z < m_SelfTestCubeZ - 0.3f;
+            SelfTestLog(std::format("cube drop: z={:.2f} (was {:.2f}) RESULT: {}", s_Z, m_SelfTestCubeZ, s_Pass ? "PASS" : "FAIL"));
+            m_SelfTestPasses += s_Pass ? 1 : 0;
+
+            m_SelfTest = SelfTestStage::Done;
+            SelfTestLog(std::format("SUMMARY: {}/9 passed, 47 restored", m_SelfTestPasses));
             return;
         }
 
@@ -1479,21 +1618,20 @@ void PortalGun::SetBodyMotion(ZDynamicPhysicsAspect* p_Body, const SMatrix& p_Po
     p_Body->m_pPhysicsObject->MoveTransform(p_Pose);
 }
 
-void PortalGun::TryGrab(const ZEntityRef& p_Hitman) {
+void PortalGun::TryGrab(const ZEntityRef& p_Hitman, const SVector3* p_Origin, const SVector3* p_Aim) {
     const auto s_Camera = Functions::GetCurrentCamera->Call();
 
-    if (!s_Camera)
+    if (!s_Camera && !p_Origin)
         return;
 
-    const SMatrix s_CameraTrans = s_Camera->GetObjectToWorldMatrix();
-    const SVector3 s_Origin = ToVec3(s_CameraTrans.Trans);
-    const SVector3 s_Aim = (ToVec3(s_CameraTrans.CameraBackward) * -1.f).Normalized();
+    const SVector3 s_Origin = p_Origin ? *p_Origin : ToVec3(s_Camera->GetObjectToWorldMatrix().Trans);
+    const SVector3 s_Aim = p_Aim ? p_Aim->Normalized() : (ToVec3(s_Camera->GetObjectToWorldMatrix().CameraBackward) * -1.f).Normalized();
 
     // Portal reaches player_use_radius-style: the camera sits behind 47 in third person, so the reach
     // is measured from 47's head rather than from the camera.
     float s_Skip = 0.f;
 
-    if (const auto s_Spatial = p_Hitman.QueryInterface<ZSpatialEntity>()) {
+    if (const auto s_Spatial = p_Hitman.QueryInterface<ZSpatialEntity>(); s_Spatial && !p_Origin) {
         const SVector3 s_Head = ToVec3(s_Spatial->GetObjectToWorldMatrix().Trans) + SVector3(0.f, 0.f, 1.6f);
         s_Skip = std::max(0.f, (s_Head - s_Origin).Dot(s_Aim));
     }
