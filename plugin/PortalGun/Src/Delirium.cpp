@@ -254,11 +254,11 @@ namespace {
 
     // Delirium's own calls to the game's deactivate (the get-up), past HkDeactivate.
     void OurDeactivate(ZHM5BaseCharacter* c) {
-        if (!Functions::ZHM5BaseCharacter_DeactivateRagdoll)
+        if (!g_DeactivateAt)
             return;
 
         t_OurDeactivate = true;
-        Functions::ZHM5BaseCharacter_DeactivateRagdoll->Call(c);
+        (g_Deactivate ? g_Deactivate : reinterpret_cast<void (*)(ZHM5BaseCharacter*)>(g_DeactivateAt))(c);
         t_OurDeactivate = false;
     }
 
@@ -363,14 +363,24 @@ void Delirium::Configure(const std::filesystem::path& p_Dir, const std::string& 
         if (s_P == MH_OK)
             MH_EnableHook(g_PoweredAt);
 
-        g_DeactivateAt = AddressOf(Functions::ZHM5BaseCharacter_DeactivateRagdoll);
+        // Not the SDK's ZHM5BaseCharacter_DeactivateRagdoll: its pattern is ActivateRagdoll's (same bytes, same
+        // address), so every "deactivate" so far switched the game's ragdoll ON (the get-up's end knocking NPCs back
+        // down, the body off its character after). The real one (ragdoll +0x30 off, animator state 0), checked by
+        // its first bytes.
+        {
+            static constexpr uint8_t c_Deact[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x41, 0x68, 0x48, 0x8b,
+                0xd9, 0x48, 0x8b, 0x88, 0xa8, 0x00, 0x00, 0x00, 0x48, 0x85, 0xc9, 0x74, 0x1f, 0x83, 0xb8, 0x40, 0x01, 0x00,
+                0x00, 0x00, 0x75, 0x16};
+            auto* s_At = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr)) + 0xfd120;
+            g_DeactivateAt = std::memcmp(s_At, c_Deact, sizeof(c_Deact)) == 0 ? s_At : nullptr;
+        }
         const int s_D = g_DeactivateAt
             ? MH_CreateHook(g_DeactivateAt, reinterpret_cast<void*>(&HkDeactivate), reinterpret_cast<void**>(&g_Deactivate)) : -99;
 
         if (s_D == MH_OK)
             MH_EnableHook(g_DeactivateAt);
 
-        Logger::Info("[Delirium] Game ragdoll-off hook: {} ({}).", g_Deactivate ? "on" : "NO", s_D);
+        Logger::Info("[Delirium] Game ragdoll-off hook: {} ({} at {}).", g_Deactivate ? "on" : "NO", s_D, g_DeactivateAt);
 
         // MinHook's status (-99: the SDK found no address; 9: the function is already hooked by us, ...), for the log.
         Logger::Info("[Delirium] Game ragdoll hooks: {} ({} at {}), {} ({} at {}).", g_Ragdoll ? "ragdoll" : "NO ragdoll", s_R,
