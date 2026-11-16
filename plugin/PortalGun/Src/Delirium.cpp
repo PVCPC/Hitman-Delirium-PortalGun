@@ -1375,12 +1375,21 @@ void Delirium::Follow(Body& b) {
             // character (Billy: the skeleton floating off Homer, the NPC teleporting, a corpse apart from its body: 6 m
             // in his run), the measured one is that gap: the last good one for this bone instead.
             // Per body: bone numbers differ between skeletons (a woman's bone 7 isn't a man's).
+            // Good is a few cm (0.00-0.01 m in the logs). The old 0.25 m let a runner's 0.2 m lag in, and with no
+            // good one yet the bad one was used: Billy's shot NPCs glued 0.8-1.3 m off Homer, swinging in circles as
+            // he rolled and pushed through the floor (the ragdoll's bodies not placed yet as the game turned it on).
+            // Kept per skeleton too (keyed by its bone count, so a woman's bone 7 isn't a man's); none at all: on the bone.
             auto& s_Good = b.m_GoodOff;
+            const int s_Key = static_cast<int>(b.m_World.size() / 7) << 16 | s_Bones[i];
 
-            if (s_Op.Length() < 0.25f)
-                std::copy_n(o, 7, s_Good[s_Bones[i]].begin());
+            if (s_Op.Length() < 0.05f)
+                std::copy_n(o, 7, s_Good[s_Bones[i]].begin()), std::copy_n(o, 7, m_GoodOffAll[s_Key].begin());
             else if (const auto g = s_Good.find(s_Bones[i]); g != s_Good.end())
                 std::copy_n(g->second.begin(), 7, o), s_Log += "(own) ";
+            else if (const auto a = m_GoodOffAll.find(s_Key); a != m_GoodOffAll.end())
+                std::copy_n(a->second.begin(), 7, o), s_Log += "(skeleton's) ";
+            else
+                o[0] = o[1] = o[2] = 0.f, s_Log += "(on the bone) ";
 
             b.m_FollowRig[i] = r;
             SetKinematic(s_Bodies[i], true);
@@ -1713,8 +1722,9 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         const SVector3 s_Fwd = SVector3(-s_E.YAxis.x, -s_E.YAxis.y, 0.f).Normalized();
 
         for (int k = 7; k <= 10; ++k) {
-            s_Joints[k * 3] += s_Fwd.x * 0.05f;
-            s_Joints[k * 3 + 1] += s_Fwd.y * 0.05f;
+            // Billy: 5 cm gave him a rack (the chest out past the suit's front): 2.
+            s_Joints[k * 3] += s_Fwd.x * 0.02f;
+            s_Joints[k * 3 + 1] += s_Fwd.y * 0.02f;
         }
 
         s_Joints[10 * 3 + 2] += 0.10f; // Pelican: toward the j10-j11 midpoint, part 10's top meeting j11
@@ -2586,6 +2596,10 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             s_D.z = 0.f;
             const bool s_Touch = s_D.Length() < 0.7f;
 
+            // Clear of 47 again: it meets his body again.
+            if (b.m_NoAgents && s_D.Length() > 0.9f)
+                nm_agent_collide_agents(b.m_Agent, b.m_Ragdoll || !b.m_Npc ? 1 : 0), b.m_NoAgents = false;
+
             // (The old test set m_Touching only while touching: after the first touch, no bump ever again.)
             if (std::exchange(b.m_Touching, s_Touch) || !s_Touch || b.m_Ragdoll || b.m_Recover > 0.f || b.m_Stagger > 0.f)
                 continue;
@@ -2606,6 +2620,10 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 continue;
 
             SetRagdoll(b, true);
+            // The Playroom's way (niko.rs): the Hero's body never rams Homer; the bump is the balance reaction and the
+            // shove's 30 N s. Here 47's keyframed body carried them off at his sprint (6 m/s pelvis in the bump watch):
+            // Billy's flying bumps. Out of the other bodies until he's clear.
+            nm_agent_collide_agents(b.m_Agent, 0), b.m_NoAgents = true;
             const float s_Look[3] = {s_Hips.x, s_Hips.y, s_Hips.z + 0.75f};
             nm_agent_task_balance(b.m_Agent, m_World, b.m_Health < 140.f ? "WEAK" : "*", s_Look);
 

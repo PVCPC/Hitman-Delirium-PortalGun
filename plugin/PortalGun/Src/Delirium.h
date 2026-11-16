@@ -75,6 +75,7 @@ public:
     bool m_HitmanBody = true; // 47 always has his body (to bump peds); ragdoll only in a floor portal (Dive)
     bool m_ShowBodies = true;
     bool m_Wire = false; // bodies drawn as outlines
+    std::unordered_map<int, std::array<float, 7>> m_GoodOffAll; // Follow: good offsets per (skeleton's bone count << 16 | bone)
     float m_Clock = 0.f; // seconds of Update
 
 private:
@@ -119,6 +120,7 @@ private:
         float m_Stagger = 0.f; // s before 47 can bump this NPC again (the Playroom's STAGGER_TIME)
         float m_ShotAt = -1.f; // m_Clock of its last shot (one per 0.1 s)
         bool m_Touching = false;
+        bool m_NoAgents = false; // Bumped: out of the other bodies until 47 is clear
         std::unordered_map<int, std::array<float, 7>> m_GoodOff; // Follow: each game bone's last good offset // 47 within touching distance last frame (nm_player_bump once per touch)
         SVector3 m_BumpHips; // last frame's hips, for its move state
         bool m_HadBumpHips = false;
