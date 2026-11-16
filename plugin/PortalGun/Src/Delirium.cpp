@@ -1360,7 +1360,11 @@ void Delirium::Follow(Body& b) {
             const int r = static_cast<int>(it - b.m_Bones.begin());
             const SMatrix s_M = s_AtKill ? s_Start[i] : static_cast<IPhysicsObject*>(s_Bodies[i])->GetTransform();
             const Q s_Bq = FromAxes(s_M.XAxis, s_M.YAxis, s_M.ZAxis);
-            const float* w = &(s_AtKill ? b.m_RigAtKill : b.m_RigWorld)[r * 7];
+            // Against the bone as the game made the ragdoll on it: this frame's animation (Posed ran just before),
+            // not NM's last pose. A running NPC's NM pose trails its animation by a step or two (Billy's runner:
+            // 0.2 m on every body, baked into the offsets; after her get-up her belly sat apart from her body).
+            const bool s_Anim = !s_AtKill && b.m_World.size() >= static_cast<size_t>(s_Bones[i] + 1) * 7;
+            const float* w = s_Anim ? &b.m_World[s_Bones[i] * 7] : &(s_AtKill ? b.m_RigAtKill : b.m_RigWorld)[r * 7];
             const Q s_Wq {w[3], w[4], w[5], w[6]};
             const Q s_Oq = Norm(Mul(Conj(s_Wq), s_Bq));
             const SVector3 s_Op = Rot(Conj(s_Wq), SVector3(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z) - V(w));
@@ -1370,7 +1374,8 @@ void Delirium::Follow(Body& b) {
             // A body's place on its bone is the ragdoll's own (a few cm). Made while NM's body lay metres from the
             // character (Billy: the skeleton floating off Homer, the NPC teleporting, a corpse apart from its body: 6 m
             // in his run), the measured one is that gap: the last good one for this bone instead.
-            static std::unordered_map<int, std::array<float, 7>> s_Good;
+            // Per body: bone numbers differ between skeletons (a woman's bone 7 isn't a man's).
+            auto& s_Good = b.m_GoodOff;
 
             if (s_Op.Length() < 0.25f)
                 std::copy_n(o, 7, s_Good[s_Bones[i]].begin());
