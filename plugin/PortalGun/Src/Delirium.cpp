@@ -1992,6 +1992,32 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
 
     if (p_On) {
         nm_agent_keyframe(b->m_Agent, "fb", 0);
+
+        // Pelican (Bobby_Caretaker-1794866323984): a keyframed foot came in at 9.6 m/s from an animation jump and the
+        // ragdoll started with it. Each part at most 3 m/s off the pelvis's speed, spin at most 10 rad/s.
+        {
+            float p[3], q[4], s_V0[3], w[3];
+            nm_agent_get_part_velocity(b->m_Agent, 0, s_V0, w);
+
+            for (int i = 0; i < c_Parts; ++i) {
+                float v[3];
+                nm_agent_get_part_transform(b->m_Agent, i, p, q);
+                nm_agent_get_part_velocity(b->m_Agent, i, v, w);
+                SVector3 d = V(v) - V(s_V0), s_W = V(w);
+
+                if (d.Length() <= 3.f && s_W.Length() <= 10.f)
+                    continue;
+
+                if (d.Length() > 3.f)
+                    d = d.Normalized() * 3.f;
+
+                if (s_W.Length() > 10.f)
+                    s_W = s_W.Normalized() * 10.f;
+
+                const float s_NewV[3] = {s_V0[0] + d.x, s_V0[1] + d.y, s_V0[2] + d.z}, s_NewW[3] = {s_W.x, s_W.y, s_W.z};
+                nm_agent_set_part_state(b->m_Agent, i, p, q, s_NewV, s_NewW);
+            }
+        }
         nm_agent_collide_agents(b->m_Agent, 1);
         b->m_HighFall = false;
         b->m_PoseA.clear();
