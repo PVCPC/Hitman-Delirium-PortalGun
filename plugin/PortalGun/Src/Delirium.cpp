@@ -1449,10 +1449,12 @@ void Delirium::Follow(Body& b) {
         IPhysicsObject* s_Obj = static_cast<IPhysicsObject*>(s_Bodies[i]);
         const SMatrix s_Now = s_Obj->GetTransform();
 
+        // Billy: Homer looked choppy. A kinematic move lands at Hitman's next physics step, so the mesh on it moved at
+        // the physics rate; every body is put on its place each frame (it's only the mesh's; NM does the physics).
         if ((SVector3(s_Now.Trans.x, s_Now.Trans.y, s_Now.Trans.z) - SVector3(s_To.Trans.x, s_To.Trans.y, s_To.Trans.z)).Length() > 0.3f)
-            s_Obj->SetTransform(s_To), ++s_Put;
-        else
-            s_Obj->MoveTransform(s_To);
+            ++s_Put;
+
+        s_Obj->SetTransform(s_To);
     }
 
     static int s_PutLogs = 0;
