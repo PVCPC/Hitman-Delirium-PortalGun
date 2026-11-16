@@ -1834,6 +1834,19 @@ bool Delirium::HitmanDown() {
     return b && (b->m_Ragdoll || b->m_Blend > 0.f);
 }
 
+bool Delirium::Dive(const SVector3& p_Vel) {
+    Body* b = Hitman();
+
+    if (!b || b->m_Ragdoll)
+        return b != nullptr;
+
+    SetHitmanRagdoll(true);
+    const float s_V[3] = {p_Vel.x, p_Vel.y, p_Vel.z};
+    nm_agent_add_velocity(b->m_Agent, s_V);
+    Logger::Info("[Delirium] 47 into the floor portal as a ragdoll at {:.1f} m/s.", p_Vel.Length());
+    return true;
+}
+
 void Delirium::SetHitmanRagdoll(bool p_On) {
     m_HitmanRagdoll = p_On;
 
@@ -2250,8 +2263,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         s_Me = Hitman();
     }
 
-    if (s_ToggleRagdoll)
-        SetHitmanRagdoll(!m_HitmanRagdoll);
+    // Billy: 47 goes ragdoll only falling into a floor portal (Dive); Numpad 2 only puts his body on.
 
     if ((m_NpcTimer -= p_Dt) <= 0.f) {
         m_NpcTimer = 1.f;
@@ -2277,8 +2289,11 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             continue;
 
         // A body: hit, it goes; stood up, back on its animation.
+        if (s_Body && !s_Body->m_Npc && s_What != "Stand up again")
+            continue; // 47: floor portals only (Billy)
+
         if (s_Body && s_What != "Stand up again")
-            s_Body->m_Npc ? SetRagdoll(*s_Body, true) : SetHitmanRagdoll(true);
+            SetRagdoll(*s_Body, true);
 
         if (s_Body && s_What == "Stand up again") {
             nm_agent_set_dead(a, 0);
@@ -2530,7 +2545,9 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 SMatrix s_M = b.m_HeldRot;
                 s_M.Trans.x = s_Pos[0];
                 s_M.Trans.y = s_Pos[1];
-                s_M.Trans.z = b.m_HeldZ;
+                // His feet on the ground under the body (it comes out of the far portal at another height).
+                const auto s_G = m_LastGround.find(b.m_Agent);
+                s_M.Trans.z = s_G != m_LastGround.end() && std::abs(s_G->second - s_Pos[2]) < 2.f ? s_G->second : s_Pos[2] - 0.2f;
                 b.m_Spatial->SetObjectToWorldMatrixFromEditor(s_M);
             }
 
@@ -2674,7 +2691,7 @@ void Delirium::Draw3D(IRenderer* p_Renderer) {
 
 void Delirium::DrawMenu() {
     ImGui::TextWrapped("%s", m_Status.c_str());
-    ImGui::Checkbox("Delirium on 47 (test bed; off: NPCs only)", &m_HitmanBody);
+    ImGui::Checkbox("47's Homer body (bumps peds; ragdolls only in floor portals)", &m_HitmanBody);
     ImGui::SameLine();
     ImGui::Checkbox("Show bodies", &m_ShowBodies);
 

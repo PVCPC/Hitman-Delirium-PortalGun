@@ -817,7 +817,11 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
                 const SVector3 s_Local = ToLocal(s_Portal->m_Transform, s_Feet);
 
                 if (std::abs(s_Local.y) < 0.3f && InsideOval(s_Local, -c_CapsuleRadius * 0.5f)) {
-                    StartFlight(s_Feet, SVector3(m_WalkVel.x, m_WalkVel.y, 0.f));
+                    // Billy: falling into a floor portal is 47's only ragdoll; his body falls through by itself
+                    // (the Playroom's transit) and he follows it. No body: the old flight.
+                    if (!m_Delirium.Dive(SVector3(m_WalkVel.x, m_WalkVel.y, -1.f)))
+                        StartFlight(s_Feet, SVector3(m_WalkVel.x, m_WalkVel.y, 0.f));
+
                     break;
                 }
             }
@@ -840,7 +844,8 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
         m_Delirium.SetPortals(nullptr);
     }
 
-    if (m_Blue.m_Placed && m_Orange.m_Placed && !TryTeleport(m_Blue, m_Orange, s_HitmanSpatial, s_Trans))
+    // Ragdolled (a floor portal), his body goes through itself and he follows it: no teleport of his own.
+    if (m_Blue.m_Placed && m_Orange.m_Placed && !m_Delirium.HitmanDown() && !TryTeleport(m_Blue, m_Orange, s_HitmanSpatial, s_Trans))
         TryTeleport(m_Orange, m_Blue, s_HitmanSpatial, s_Trans);
 
     UpdateViews(s_LocalHitman.m_entityRef);

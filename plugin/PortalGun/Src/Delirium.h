@@ -64,13 +64,15 @@ public:
 
     // 47 is down (ragdolled or getting up): his own movement is off.
     bool HitmanDown();
+    // 47 falling into a floor portal: the only time his body goes ragdoll (Billy); it goes through by itself.
+    bool Dive(const SVector3& p_Vel);
 
     static void Unhook(); // unloading: the game's ragdoll back as it was
 
     // The hotkeys' states (shown in the menu): Delirium on NPCs, and 47 ragdolling.
     bool m_NpcMode = false;
     bool m_HitmanRagdoll = false;
-    bool m_HitmanBody = false;
+    bool m_HitmanBody = true; // 47 always has his body (to bump peds); ragdoll only in a floor portal (Dive)
     bool m_ShowBodies = true;
 
 private:
