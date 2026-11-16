@@ -1361,6 +1361,17 @@ void Delirium::Follow(Body& b) {
             const SVector3 s_Op = Rot(Conj(s_Wq), SVector3(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z) - V(w));
             float* o = &b.m_FollowOff[i * 7];
             o[0] = s_Op.x, o[1] = s_Op.y, o[2] = s_Op.z, o[3] = s_Oq.x, o[4] = s_Oq.y, o[5] = s_Oq.z, o[6] = s_Oq.w;
+
+            // A body's place on its bone is the ragdoll's own (a few cm). Made while NM's body lay metres from the
+            // character (Billy: the skeleton floating off Homer, the NPC teleporting, a corpse apart from its body: 6 m
+            // in his run), the measured one is that gap: the last good one for this bone instead.
+            static std::unordered_map<int, std::array<float, 7>> s_Good;
+
+            if (s_Op.Length() < 0.25f)
+                std::copy_n(o, 7, s_Good[s_Bones[i]].begin());
+            else if (const auto g = s_Good.find(s_Bones[i]); g != s_Good.end())
+                std::copy_n(g->second.begin(), 7, o), s_Log += "(own) ";
+
             b.m_FollowRig[i] = r;
             SetKinematic(s_Bodies[i], true);
             s_Log += std::format("{}:bone {} {:.2f}m ", i, s_Bones[i], s_Op.Length());
@@ -2277,9 +2288,9 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             for (const auto& e : Globals::ActorManager->m_activatedActors)
                 if (ZActor* a = e.m_pInterfaceRef; a && static_cast<void*>(a) == c && e.m_entityRef) {
                     const ZGlobalOutfitKit* s_Outfit = a->m_rOutfit.m_pInterfaceRef;
-                    Attach(a, e.m_entityRef.QueryInterface<ZSpatialEntity>(), true, s_Outfit && s_Outfit->m_bIsFemale, p_Ray,
-                        std::string(a->m_sActorName.c_str(), a->m_sActorName.size()));
-                    Logger::Info("[Delirium] {}: shot without a body, given one.", a->m_sActorName.c_str());
+                    if (Attach(a, e.m_entityRef.QueryInterface<ZSpatialEntity>(), true, s_Outfit && s_Outfit->m_bIsFemale, p_Ray,
+                        std::string(a->m_sActorName.c_str(), a->m_sActorName.size())))
+                        Logger::Info("[Delirium] {}: shot without a body, given one.", a->m_sActorName.c_str());
                     break;
                 }
 
