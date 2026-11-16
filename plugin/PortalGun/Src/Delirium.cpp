@@ -2350,42 +2350,23 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         m_HitmanHips = s_Hips;
         m_HadHitmanHips = true;
 
-        bool s_Near = false;
-
-        for (const Body& b : m_Bodies)
-            if (b.m_Npc && b.m_Ragdoll && b.m_Now.size() >= 3) {
-                const SVector3 d = V(b.m_Now.data()) - s_Hips;
-                s_Near = s_Near || SVector3(d.x, d.y, 0.f).Length() < 1.5f;
-            }
-
-        (void)s_Near; // 47 in NM's contacts (infinite mass, keyframed) flung bodies across the map (Billy): pushes only
-
+        // The Playroom's bump (Pelican: niko.rs 287-292, main.rs 3948): no push at all. Faster than 2.5 m/s, within
+        // 0.7 m, moving toward a standing NPC: NM balance looking at 47's head ("WEAK" under 140 health), and the
+        // body staggers by itself; once per 2.5 s. Lying bodies get nothing (the old per-frame shove flung them).
         for (Body& b : m_Bodies) {
-            if (b.m_Npc && b.m_Ragdoll && s_Vel.Length() > 0.6f) {
-                float p[3], q[4];
-                nm_agent_get_part_transform(b.m_Agent, 0, p, q);
-                SVector3 s_D = V(p) - s_Hips;
-                s_D.z = 0.f;
+            b.m_Stagger = std::max(0.f, b.m_Stagger - p_Dt);
 
-                if (s_D.Length() < 0.6f && std::abs(p[2] - (s_Hips.z - 0.9f)) < 0.6f && s_Vel.Dot(s_D) > 0.f) {
-                    const SVector3 s_Push = s_Vel.Normalized() * 3.f; // N s a frame: ~1 m/s on a lying body
-                    const float s_F[3] = {s_Push.x, s_Push.y, 0.f};
-                    nm_agent_apply_push(b.m_Agent, p, s_F);
-                }
-            }
-
-            if (!b.m_Npc || b.m_Ragdoll || b.m_Recover > 0.f || b.m_Now.size() < 3)
+            if (!b.m_Npc || b.m_Ragdoll || b.m_Recover > 0.f || b.m_Stagger > 0.f || b.m_Now.size() < 3)
                 continue;
 
             SVector3 s_D = V(b.m_Now.data()) - s_Hips;
             s_D.z = 0.f;
 
-            if (s_D.Length() < 0.95f && s_Vel.Length() > 2.5f && s_Vel.Dot(s_D) > 0.f) {
+            if (s_D.Length() < 0.7f && s_Vel.Length() > 2.5f && s_Vel.Dot(s_D) > 0.f) {
                 SetRagdoll(b, true);
-                const SVector3 s_Push = s_Vel.Normalized() * 100.f;
-                const float s_F[3] = {s_Push.x, s_Push.y, 0.f};
-                const float s_At[3] = {b.m_Now[0], b.m_Now[1], b.m_Now[2] + 0.3f};
-                nm_agent_apply_push(b.m_Agent, s_At, s_F);
+                const float s_Look[3] = {s_Hips.x, s_Hips.y, s_Hips.z + 0.75f};
+                nm_agent_task_balance(b.m_Agent, m_World, b.m_Health < 140.f ? "WEAK" : "*", s_Look);
+                b.m_Stagger = 2.5f;
                 Logger::Info("[Delirium] 47 bumped {} at {:.1f} m/s.", b.m_Name, s_Vel.Length());
             }
         }
