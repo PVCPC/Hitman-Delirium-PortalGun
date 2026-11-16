@@ -3228,7 +3228,7 @@ void Delirium::ShootAtAim(Body& b) {
     int s_W = nm_weapon_find(s_Gun);
 
     if (s_W < 0) // no game table: the defaults
-        s_W = nm_weapon_find(t == 0 ? "pistol" : t == 3 ? "smg" : t == 7 ? "shotgun" : "rifle");
+        s_W = nm_weapon_find(s_Gun = t == 0 ? "pistol" : t == 3 ? "smg" : t == 7 ? "shotgun" : "rifle");
 
     const float s_Dir[3] = {m_Aim.x, m_Aim.y, m_Aim.z};
     char s_Set[64] = {};
@@ -3257,6 +3257,19 @@ void Delirium::ShootAtAim(Body& b) {
         }
     }
     else {
+        // Pelican's replay (nm_scene_save): the shot moment to a file, replayed without the game to check a fix.
+        {
+            static int s_Saved = 0;
+
+            if (s_Saved++ < 20) {
+                std::string s_Name = b.m_Name;
+                std::ranges::replace_if(s_Name, [](char c) { return !std::isalnum(static_cast<unsigned char>(c)); }, '_');
+                const std::string s_Path = std::format("F:/Users/billy/Projects/hitman-scenes/{}-{}.txt", s_Name,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+                nm_scene_save(b.m_Agent, m_World, s_Path.c_str(), s_Gun, s_Part, s_At, s_Dir, b.m_Health);
+            }
+        }
+
         const float s_Left = nm_agent_shoot_weapon(b.m_Agent, m_World, s_W, s_Part, s_At, s_Dir, b.m_Health);
         // Pelican: under 100 he goes down, under 50 dead; a stagger needs ~200. The health in and out, then 6 s of the task.
         Logger::Info("[Delirium] {}: shot ({} on part {}), health {:.0f} > {:.0f}.", b.m_Name, s_Gun, s_Part, b.m_Health, s_Left);
