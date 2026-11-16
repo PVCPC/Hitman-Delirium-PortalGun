@@ -40,6 +40,8 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 30 | Shooting a portal froze 47 in place | built: the camera tablet sat in his chest and caught him; moved behind the portal |
 | 31 | Shooting a ped crashes the game (still, after the first fix) | built: the game's ragdoll is never blocked on NPCs now (its death code walked an empty list, HITMAN3+0x10c3bc4); a ped the game ragdolls is let go by Delirium |
 | 32 | Everyone's upper Homer twitches rapidly and violently; nobody's arms line up; peds twist around their Homer | built: (Pelican) the body was created in Homer's arms-down pose but the rig baked against the bind pose (arms out): arm parts a hand's length off their bones. Parts now put on the bind pose before the rig; log says how far off they were. Also the same bone pass every frame |
+| 66 | Portals feel like a teleporter: must work like Portal 2 (walk through with camera and motion unchanged, natural) | open (Billy 11-15). Now: 47's entity is moved to the exit and put in flight; the camera keeps its old world direction and catches up. Needed: the camera's yaw/pitch turned with the portal pair in the same frame, its position snapped (no blend), walking kept as walking (no flight) on wall-to-wall, crossing when he reaches the plane. Finding the main camera's yaw (ZHM5MainCamera) first. |
+| 67 | Portal views still way too bright | open (Billy 11-15), same as #14. |
 
 ## Trainer and menu
 
