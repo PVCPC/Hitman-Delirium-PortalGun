@@ -621,8 +621,14 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
     const size_t s_One = p_One && !s_Agents.empty() ? m_GroundNext++ % s_Agents.size() : SIZE_MAX;
 
     for (size_t p = 0; p < s_Agents.size() && p < c_MaxMeshes; ++p) {
-        if (s_One != SIZE_MAX && p != s_One)
-            continue;
+        // Pelican: a body moving faster than 1 m/s (ragdolled, thrown) gets its patch every frame; still ones wait their turn.
+        if (s_One != SIZE_MAX && p != s_One) {
+            float v[3], w[3];
+            nm_agent_get_part_velocity(s_Agents[p], 0, v, w);
+
+            if (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] < 1.f)
+                continue;
+        }
 
         if (std::ranges::any_of(m_Bodies, [&](const Body& b) { return b.m_Agent == s_Agents[p] && b.m_GettingUp; }))
             continue;
@@ -643,9 +649,6 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
             s_At.m_Open = m_PortalsOpen;
             std::memcpy(s_At.m_Portals, m_Portals, sizeof(s_At.m_Portals));
         }
-
-        float s_Parts[c_Parts * 7];
-        nm_agent_get_part_transforms(s_Agents[p], s_Parts, c_Parts);
 
         std::vector<float> s_Verts;
         std::vector<uint32_t> s_Tris;
@@ -721,7 +724,7 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
             const float s_Ang = k * 6.2831853f / 12.f;
             const SVector3 s_Dir(std::cos(s_Ang), std::sin(s_Ang), 0.f);
 
-            for (const float s_H : {0.25f, 0.7f, 1.3f}) {
+            for (const float s_H : {0.15f, 0.25f, 0.7f, 1.3f}) { // 0.15: under a fence's low rail (Pelican)
                 const SVector3 s_From(s_Pos[0], s_Pos[1], s_Floor + s_H);
                 SVector3 s_Hit, s_N;
 
@@ -778,18 +781,8 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
             const float h = w.m_Half;
             constexpr float c_Thick = 0.8f;
 
-            // Pelican: contact is two-sided, a part past a slab's midline is pushed out its far side (the phasing). The
-            // slab is 0.8 m deep behind the hit face, and none is built through this body (it threw lying bodies out).
-            bool s_Through = false;
-
-            for (int k = 0; k < c_Parts && !s_Through; ++k) {
-                const SVector3 d = V(&s_Parts[k * 7]) - w.m_Hit;
-                const float s_In = -d.Dot(w.m_N), s_Along = d.Dot(s_Side), s_Up = s_Parts[k * 7 + 2] - w.m_Floor;
-                s_Through = s_In > -0.05f && s_In < c_Thick && std::abs(s_Along) < h && s_Up > -0.1f && s_Up < 2.2f;
-            }
-
-            if (s_Through)
-                continue;
+            // Pelican: every panel, always. Skipping one with a part in it let a limb 0.1-0.3 m into the face take the
+            // whole wall away (Billy: Homer through walls); in front of the 0.8 m slab's midline, contact pushes it back out.
 
             const uint32_t s_Base = static_cast<uint32_t>(s_Verts.size() / 3);
 
