@@ -95,6 +95,7 @@ private:
     bool IsCarved(const SVector3& p_Point) const;
     bool FlightRayCast(const SVector3& p_From, const SVector3& p_To, SVector3& p_Hit, SVector3& p_Normal) const;
     static SVector3 MapDirection(const SVector3& p_Dir, const SMatrix& p_In, const SMatrix& p_Out);
+    void TurnCamera(const SMatrix& p_In, const SMatrix& p_Out);
     void RunSelfTest(ZSpatialEntity* p_Hitman, const SMatrix& p_PlayerTrans, float p_Dt);
     void SelfTestLog(const std::string& p_Line);
 

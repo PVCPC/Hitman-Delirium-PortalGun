@@ -1358,7 +1358,14 @@ bool PortalGun::TryTeleport(Portal& p_In, Portal& p_Out, ZSpatialEntity* p_Hitma
 
     p_Hitman->SetObjectToWorldMatrixFromEditor(s_NewTrans);
     m_LastTeleportTarget = s_NewTrans;
-    StartFlight(ToVec3(s_NewTrans.Trans), s_OutVel);
+    TurnCamera(s_InTrans, p_Out.m_Transform);
+
+    // Portal 2: walking wall to wall he just walks on (the turned camera turns his walk); flight only for falls and
+    // floors / ceilings.
+    const bool s_Walls = std::abs(s_InTrans.YAxis.z) <= c_FloorNormalZ && std::abs(s_OutNormal.z) <= c_FloorNormalZ;
+
+    if (m_Flying || !s_Walls)
+        StartFlight(ToVec3(s_NewTrans.Trans), s_OutVel);
     Logger::Info(
         "[PortalGun] Through at {:.1f} m/s, out ({:.1f}, {:.1f}, {:.1f}).", s_InVel.Length(), s_OutVel.x, s_OutVel.y,
         s_OutVel.z
@@ -1375,6 +1382,53 @@ bool PortalGun::TryTeleport(Portal& p_In, Portal& p_Out, ZSpatialEntity* p_Hitma
     Logger::Info("[PortalGun] Teleport #{}.", m_TeleportCount);
 
     return true;
+}
+
+// Portal 2 (Billy): the view goes on through the portal, turned with the pair, in the same frame; no swing round
+// after. Hitman's third-person camera (ZHM5MainCamera +0x2d8): yaw at +0x2c (+0x3e4 its working copy), radians,
+// atan2(forward.x, forward.y); pitch +0x30 / +0x3e0, clamped by +0x8b4 / +0x8b8; +0x210 one frame of snap (follow
+// and smoothing rebuilt). Found by disassembly (HITMAN3+0x73c480, +0x740980); both vtables checked first.
+void PortalGun::TurnCamera(const SMatrix& p_In, const SMatrix& p_Out) {
+    static int s_Logs = 0;
+    const auto s_Camera = Functions::GetCurrentCamera->Call();
+    const auto s_Local = SDK()->GetLocalPlayer();
+
+    if (!s_Camera || !s_Local.m_pInterfaceRef)
+        return;
+
+    auto* s_Exe = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
+    auto* s_Main = reinterpret_cast<uint8_t*>(s_Local.m_pInterfaceRef->m_rMainCamera.m_pInterfaceRef);
+    uint8_t* s_Tp = s_Main && *reinterpret_cast<uint8_t**>(s_Main) == s_Exe + 0x1e44770
+        ? *reinterpret_cast<uint8_t**>(s_Main + 0x2d8) : nullptr;
+
+    if (!s_Tp || *reinterpret_cast<uint8_t**>(s_Tp) != s_Exe + 0x1e44438) {
+        if (s_Logs++ < 3)
+            Logger::Warn("[PortalGun] Camera not turned: main camera {} / third-person camera {} not the expected class.",
+                static_cast<void*>(s_Main), static_cast<void*>(s_Tp));
+        return;
+    }
+
+    const SVector3 f = (ToVec3(s_Camera->GetObjectToWorldMatrix().CameraBackward) * -1.f).Normalized();
+    const SVector3 g = MapDirection(f, p_In, p_Out).Normalized();
+    const auto s_Wrap = [](float a) { return std::remainder(a, 2.f * std::numbers::pi_v<float>); };
+    float& s_Yaw = *reinterpret_cast<float*>(s_Tp + 0x2c);
+    const float s_Old = s_Yaw;
+    s_Yaw = s_Wrap(s_Yaw + s_Wrap(std::atan2(g.x, g.y) - std::atan2(f.x, f.y)));
+    *reinterpret_cast<float*>(s_Tp + 0x3e4) = s_Yaw;
+
+    // Floors and ceilings turn the view up or down too.
+    if (std::abs(p_In.YAxis.z) > c_FloorNormalZ || std::abs(p_Out.YAxis.z) > c_FloorNormalZ) {
+        const float a = *reinterpret_cast<float*>(s_Tp + 0x8b4), b = *reinterpret_cast<float*>(s_Tp + 0x8b8);
+        float& s_Pitch = *reinterpret_cast<float*>(s_Tp + 0x30);
+        s_Pitch = std::clamp(s_Pitch + std::asin(std::clamp(g.z, -1.f, 1.f)) - std::asin(std::clamp(f.z, -1.f, 1.f)),
+            std::min(a, b), std::max(a, b));
+        *reinterpret_cast<float*>(s_Tp + 0x3e0) = s_Pitch;
+    }
+
+    s_Tp[0x210] = 1;
+
+    if (s_Logs++ < 10)
+        Logger::Info("[PortalGun] Camera turned with the portal: yaw {:.2f} > {:.2f}.", s_Old, s_Yaw);
 }
 
 SMatrix PortalGun::ExitTransform(const SMatrix& p_PlayerTrans, const SMatrix& p_In, const SMatrix& p_Out) {
