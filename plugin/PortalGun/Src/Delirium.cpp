@@ -622,11 +622,17 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
 
     for (size_t p = 0; p < s_Agents.size() && p < c_MaxMeshes; ++p) {
         // Pelican: a body moving faster than 1 m/s (ragdolled, thrown) gets its patch every frame; still ones wait their turn.
+        // Billy: a shot NPC sank into the floor. Its body was new (no patch yet) and stood still, so it waited its
+        // turn: NM's ground under it was 1.4 m low (pelvis 2.22 m over it as it was shot) and it fell that far. No
+        // patch, or one 0.3 m from where it is now: one this frame.
         if (s_One != SIZE_MAX && p != s_One) {
-            float v[3], w[3];
+            float v[3], w[3], s_P[3], s_Q[4];
             nm_agent_get_part_velocity(s_Agents[p], 0, v, w);
+            nm_agent_get_part_transform(s_Agents[p], 0, s_P, s_Q);
+            const auto it = m_PatchAt.find(s_Agents[p]);
+            const SVector3 d = it != m_PatchAt.end() ? V(s_P) - it->second.m_At : SVector3(1e9f, 0.f, 0.f);
 
-            if (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] < 1.f)
+            if (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] < 1.f && SVector3(d.x, d.y, 0.f).Length() < 0.3f && std::abs(d.z) < 0.3f)
                 continue;
         }
 
@@ -1388,12 +1394,13 @@ void Delirium::Follow(Body& b) {
                 std::copy_n(g->second.begin(), 7, o), s_Log += "(own) ";
             else if (const auto a = m_GoodOffAll.find(s_Key); a != m_GoodOffAll.end())
                 std::copy_n(a->second.begin(), 7, o), s_Log += "(skeleton's) ";
-            else
-                o[0] = o[1] = o[2] = 0.f, s_Log += "(on the bone) ";
+            else // the stale body's turn is as wrong as its place: the bone's own (good ones log their turn below)
+                o[0] = o[1] = o[2] = o[3] = o[4] = o[5] = 0.f, o[6] = 1.f, s_Log += "(on the bone) ";
 
             b.m_FollowRig[i] = r;
             SetKinematic(s_Bodies[i], true);
-            s_Log += std::format("{}:bone {} {:.2f}m ", i, s_Bones[i], s_Op.Length());
+            s_Log += std::format("{}:bone {} {:.2f}m {:.0f}deg ", i, s_Bones[i], s_Op.Length(),
+                2.f * std::acos(std::min(1.f, std::abs(o[6]))) * 57.2958f);
         }
 
         Logger::Info("[Delirium] {}: following its ragdoll's {} bodies ({}, offsets {}): {}", b.m_Name, n, ClassOf(s_Bodies[0]),
