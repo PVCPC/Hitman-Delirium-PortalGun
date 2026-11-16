@@ -752,22 +752,23 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
             }
         }
 
-        // Billy run 8: by park benches the grid of heights made a bench top a ramp under the NPC (Herbert West: 0.82 m
-        // over his feet) or a hole (Tiffaney Prout: 0.7 m under the street). The floor is the patch's median height;
-        // a point more than 0.4 m over or under it is a bench, a table or a hole, not floor: on the floor (the walls
-        // round it stop bodies at furniture).
+        // Billy run 8: rays near the NPC hit his own body: floor at his hips under him (Herbert West: 0.82 m over his
+        // feet). Within 1.1 m of him, a point over his lowest part + 0.35 m is his body: at his feet. Not the patch's
+        // median: Emmanuel_Bruhn-1794868937162 stood on a porch 0.95 m over the street round it.
+        // Under it by as much near him is a ray that went through his feet's floor (Tiffaney_Prout-1794868915662: 0.7 m
+        // under her feet: floating 1.64 m).
         {
-            std::vector<float> s_Zs;
+            float s_Low = 1e9f;
 
-            for (size_t i = 2; i < s_Verts.size(); i += 3)
-                s_Zs.push_back(s_Verts[i]);
+            for (int k = 0; k < c_Parts; ++k) {
+                float s_P[3], s_R[4];
+                nm_agent_get_part_transform(s_Agents[p], k, s_P, s_R);
+                s_Low = std::min(s_Low, s_P[2]);
+            }
 
-            std::nth_element(s_Zs.begin(), s_Zs.begin() + s_Zs.size() / 2, s_Zs.end());
-            const float s_Floor = s_Zs[s_Zs.size() / 2];
-
-            for (size_t i = 2; i < s_Verts.size(); i += 3)
-                if (std::abs(s_Verts[i] - s_Floor) > 0.4f)
-                    s_Verts[i] = s_Floor;
+            for (size_t i = 0; i < s_Verts.size(); i += 3)
+                if (std::hypot(s_Verts[i] - s_Pos[0], s_Verts[i + 1] - s_Pos[1]) < 1.1f && std::abs(s_Verts[i + 2] - s_Low) > 0.35f)
+                    s_Verts[i + 2] = s_Low;
 
             s_Last->second = s_Verts[(c_N / 2 * c_N + c_N / 2) * 3 + 2];
         }
@@ -1356,7 +1357,50 @@ namespace {
         g_SetKinematic(p, p_On, p_Wake);
     }
 
+    // Billy 11-16: shot NPCs flicked every frame between two spots ~2 m apart. Follow put the bodies on Homer, then
+    // the game's own ragdoll code moved them back (its pose/kinematic target; log: 19 of 19 bodies over 0.3 m off
+    // every frame after the kill). On held bodies only Delirium moves them: the game's SetTransform (7),
+    // MoveTransform (9) and slot 10 are dropped.
+    using MoveFn = void (*)(void*, const SMatrix&);
+    MoveFn g_Move[3] = {};
+    thread_local bool g_OurMove = false;
+
+    template <int I>
+    void HkMove(void* p, const SMatrix& m) {
+        if (!g_OurMove) {
+            std::scoped_lock s_Lock(g_HeldMutex);
+
+            if (g_Held.contains(p))
+                return;
+        }
+
+        g_Move[I](p, m);
+    }
+
+    void HookMoves(void* p) {
+        if (g_Move[0])
+            return;
+
+        void** s_V = *reinterpret_cast<void***>(p);
+        const int s_Slots[3] = {7, 9, 10};
+        void* s_Hk[3] = {reinterpret_cast<void*>(&HkMove<0>), reinterpret_cast<void*>(&HkMove<1>), reinterpret_cast<void*>(&HkMove<2>)};
+
+        for (int i = 0; i < 3; ++i) {
+            DWORD s_Old;
+
+            if (VirtualProtect(&s_V[s_Slots[i]], sizeof(void*), PAGE_READWRITE, &s_Old)) {
+                g_Move[i] = reinterpret_cast<MoveFn>(s_V[s_Slots[i]]);
+                s_V[s_Slots[i]] = s_Hk[i];
+                VirtualProtect(&s_V[s_Slots[i]], sizeof(void*), s_Old, &s_Old);
+            }
+        }
+
+        Logger::Info("[Delirium] The game's moves of NM's ragdoll bodies are held.");
+    }
+
     void HookSetKinematic(void* p) {
+        HookMoves(p);
+
         if (g_SetKinematic)
             return;
 
@@ -1549,7 +1593,10 @@ void Delirium::Follow(Body& b) {
         if ((SVector3(s_Now.Trans.x, s_Now.Trans.y, s_Now.Trans.z) - SVector3(s_To.Trans.x, s_To.Trans.y, s_To.Trans.z)).Length() > 0.3f)
             ++s_Put;
 
+        g_OurMove = true;
         s_Obj->SetTransform(s_To);
+        s_Obj->MoveTransform(s_To); // its kinematic target too: the physics step doesn't take it back elsewhere
+        g_OurMove = false;
     }
 
     static int s_PutLogs = 0;
@@ -2017,6 +2064,16 @@ void Delirium::Unhook() {
 }
 
 void Delirium::Detach(Body& p_Body) {
+    // Its game ragdoll's bodies let go (held, the game couldn't move them: a frozen corpse).
+    if (p_Body.m_Npc && p_Body.m_Follow) {
+        void* s_Bodies[c_MaxRagdollBodies];
+        int s_Bones[c_MaxRagdollBodies];
+        void* s_Set = nullptr;
+
+        for (int i = 0, n = ReadRagdoll(p_Body.m_Char, &s_Set, s_Bodies, s_Bones); i < n; ++i)
+            SetKinematic(s_Bodies[i], false);
+    }
+
     Own(p_Body.m_Char, false, false);
     Down(p_Body.m_Char, false);
     Bones::Override(p_Body.m_Anim, {});
