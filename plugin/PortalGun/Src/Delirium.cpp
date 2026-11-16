@@ -1322,6 +1322,18 @@ void Delirium::Follow(Body& b) {
             b.m_FollowSet = nullptr;
         }
 
+        // Billy: shot, the game took its ragdoll off ~30 s later (not through its deactivate, which is blocked) and
+        // the green skeleton walked off on its AI while Homer lay there. Down is down: the game's ragdoll on again.
+        if (n == 0 && b.m_Npc && b.m_Ragdoll && !b.m_Dead && Functions::ZHM5BaseCharacter_ActivateRagdoll) {
+            static int s_Logs = 0;
+
+            if (s_Logs++ < 10)
+                Logger::Info("[Delirium] {}: the game's ragdoll went off while its body is down; on again.", b.m_Name);
+            Functions::ZHM5BaseCharacter_ActivateRagdoll->Call(b.m_Char, true);
+            GameTook(b.m_Char);
+            return;
+        }
+
         if (n == 0 && !b.m_Ragdoll && !b.m_Dead)
             b.m_Follow = false;
 
@@ -2247,6 +2259,29 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         std::scoped_lock s_Lock(m_HitMutex);
         s_Hits.swap(m_Hits);
     }
+
+    // Billy's run: no YouGotHit for 47's bullets at all, so shots never reached Delirium. A drop in an NPC's hit
+    // points (ZActor +0x1028) is a hit.
+    if (Globals::ActorManager)
+        for (const auto& e : Globals::ActorManager->m_activatedActors)
+            if (ZActor* a = e.m_pInterfaceRef) {
+                const float s_Hp = a->m_fCurrentHitPoints;
+                const auto it = m_Hp.find(a);
+
+                if (it != m_Hp.end() && s_Hp < it->second - 0.01f) {
+                    static int s_Logs = 0;
+
+                    if (s_Logs++ < 20)
+                        Logger::Info("[Delirium] {}: hit ({:.0f} > {:.0f} hit points).", a->m_sActorName.c_str(), it->second, s_Hp);
+
+                    s_Hits.push_back(a);
+                }
+
+                m_Hp[a] = s_Hp;
+            }
+
+    std::ranges::sort(s_Hits);
+    s_Hits.erase(std::unique(s_Hits.begin(), s_Hits.end()), s_Hits.end());
 
     for (void* c : s_Hits) {
         // Billy: shot from afar (past the 15 m / 6 NPCs that get bodies), it reacted as Hitman's. Its body now.
