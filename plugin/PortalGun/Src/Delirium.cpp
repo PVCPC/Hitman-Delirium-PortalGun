@@ -1786,7 +1786,9 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     // On its animation exactly until hit or killed (GTA IV's way); a free half-ragdoll walking it sent them flying.
     // Keyframed parts can't move, so a keyframed NPC stays out of the other bodies' contacts until it ragdolls.
     nm_agent_keyframe(b.m_Agent, "fb", 1);
-    nm_agent_collide_agents(b.m_Agent, 0);
+    // 47 is in them (Pelican: the Playroom's bump staggers by contact; the across-the-map fling was the
+    // deactivate-is-activate bug, the game ragdoll switching on under NM, not his keyframed body).
+    nm_agent_collide_agents(b.m_Agent, b.m_Npc ? 0 : 1);
 
     Logger::Info("[Delirium] {} has {}'s body ({} bones, {} rigged).", p_Name, s_Base == m_Wilma ? "Wilma" : "Homer", n,
         s_N);
@@ -1959,7 +1961,7 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
             nm_rig_take(b->m_Rig, b->m_Agent, b->m_Now.data(), nullptr, 0.f);
 
         nm_agent_keyframe(b->m_Agent, "fb", 1);
-        nm_agent_collide_agents(b->m_Agent, 0);
+        nm_agent_collide_agents(b->m_Agent, b->m_Npc ? 0 : 1);
     }
 
     Logger::Info("[Delirium] {} ragdoll {}.", b->m_Name, p_On ? "on" : "off");
@@ -2561,8 +2563,12 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 if (s_Max > 5.f && s_Lying > 0.5f) {
                     char s_Pn[32] = {};
                     nm_part_name(s_Part, s_Pn, sizeof(s_Pn));
-                    Logger::Warn("[Delirium] {}: lying {:.1f} s but its {} moves {:.1f} m/s (map or joints wrong?).", b.m_Name,
-                        s_Lying, s_Pn, s_Max);
+                    const Body* h = Hitman();
+                    const float s_To47 = h && h->m_Now.size() >= 3 && !b.m_Now.empty()
+                        ? (V(b.m_Now.data()) - V(h->m_Now.data())).Length() : -1.f;
+                    Logger::Warn("[Delirium] {}: lying {:.1f} s but its {} moves {:.1f} m/s (map or joints wrong?); game "
+                        "ragdoll {}, 47 {:.1f} m away (Pelican: a fling).", b.m_Name, s_Lying, s_Pn, s_Max,
+                        GameRagdollOn(b.m_Char) ? "on" : "off", s_To47);
                 }
             }
 
