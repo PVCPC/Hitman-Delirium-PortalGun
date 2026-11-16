@@ -2596,6 +2596,10 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             s_D.z = 0.f;
             const bool s_Touch = s_D.Length() < 0.7f;
 
+            // The bump's lean away ends after a second (the Playroom's lean_stop).
+            if (b.m_LeanStop > 0.f && (b.m_LeanStop -= p_Dt) <= 0.f)
+                nm_msg_send_text(b.m_Agent, m_World, "leanInDirection start=false");
+
             // Clear of 47 again: it meets his body again.
             if (b.m_NoAgents && s_D.Length() > 0.9f)
                 nm_agent_collide_agents(b.m_Agent, b.m_Ragdoll || !b.m_Npc ? 1 : 0), b.m_NoAgents = false;
@@ -2626,6 +2630,14 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             nm_agent_collide_agents(b.m_Agent, 0), b.m_NoAgents = true;
             const float s_Look[3] = {s_Hips.x, s_Hips.y, s_Hips.z + 0.75f};
             nm_agent_task_balance(b.m_Agent, m_World, b.m_Health < 140.f ? "WEAK" : "*", s_Look);
+            // The Playroom's bump (main.rs 3969, peds.rs NMBalance 82611900): lean 0.4 away from 47 for 1 s.
+            {
+                const SVector3 s_Away = s_D.Normalized();
+                const std::string s_Lean = std::format("leanInDirection start=true applyAsForce=true leanAmount=0.4 dir={:.3f},{:.3f},0",
+                    s_Away.x, s_Away.y);
+                nm_msg_send_text(b.m_Agent, m_World, s_Lean.c_str());
+                b.m_LeanStop = 1.f;
+            }
 
             if (s_R == NM_BUMP_SHOVE) {
                 float p[3], q[4];
