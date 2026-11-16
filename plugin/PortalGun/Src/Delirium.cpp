@@ -1724,6 +1724,10 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         return false;
     }
 
+    // Billy: the head sat in the neck (the same with only the lower neck on joint 11: the fit was unchanged). Hitman's
+    // skull is taller than the fitted head, which sits at the jaw: Pelican's raise and growth for a tall one.
+    nm_build_set_head(b.m_Build, 0.05f, 1.08f);
+
     Logger::Info("[Delirium] {}: Homer fitted to its skeleton ({:.0f} kg).", p_Name, nm_build_get_weight(b.m_Build));
 
     // Once: each part's radius / half length, Homer's and fitted (Pelican: a spine part much shorter than his with the
@@ -2306,9 +2310,49 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
         for (Body& b : m_Bodies)
             if (b.m_Char == c && b.m_Npc) {
+                // Billy: killed in Hitman, Homer stayed standing (NM's own health, 200, wasn't down yet). The kill
+                // shot kills NM too: health 1 first, so its shot reaction is the death (set_dead first skips it).
+                ZActor* a = static_cast<ZActor*>(b.m_Char);
+                const bool s_Kill = a->m_fCurrentHitPoints <= 0.f || a->IsDead();
                 SetRagdoll(b, true);
+
+                if (s_Kill)
+                    b.m_Health = std::min(b.m_Health, 1.f);
+
                 ShootAtAim(b);
+
+                if (s_Kill) {
+                    if (b.m_Health > 0.f)
+                        nm_agent_set_dead(b.m_Agent, 1);
+
+                    b.m_Dead = true;
+                    Logger::Info("[Delirium] {}: killed in Hitman; Homer dies.", b.m_Name);
+                }
             }
+    }
+
+    // Billy: dead bodies float and 47 can't push them. Every 2 s (10 lines a run): a dead body's pelvis over its
+    // ground, its speed, and how far 47 is.
+    {
+        static float s_Every = 0.f;
+        static int s_Logs = 0;
+
+        if ((s_Every -= p_Dt) <= 0.f && s_Logs < 10) {
+            s_Every = 2.f;
+
+            for (const Body& b : m_Bodies)
+                if (b.m_Npc && b.m_Dead) {
+                    float p[3], q[4], v[3], w[3];
+                    nm_agent_get_part_transform(b.m_Agent, 0, p, q);
+                    nm_agent_get_part_velocity(b.m_Agent, 0, v, w);
+                    const auto g = m_LastGround.find(b.m_Agent);
+                    Logger::Info("[Delirium] {}: dead, pelvis {:.2f} m over its ground, {:.1f} m/s, 47 {:.1f} m away, collides {}.",
+                        b.m_Name, g != m_LastGround.end() ? p[2] - g->second : -1.f, V(v).Length(), (V(p) - m_Eye).Length(),
+                        b.m_Ragdoll ? "with bodies" : "no");
+                    ++s_Logs;
+                    break;
+                }
+        }
     }
 
     // Numpad 1: Delirium on NPCs. Numpad 2: 47 ragdolls. Numpad 5 / 6: shoot / push the body you aim at.
