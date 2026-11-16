@@ -1424,7 +1424,7 @@ void Delirium::Follow(Body& b) {
         }
     }
 
-    int s_Lost = 0;
+    int s_Lost = 0, s_Put = 0;
 
     for (int i = 0; i < n; ++i) {
         const int r = b.m_FollowRig[i];
@@ -1442,7 +1442,24 @@ void Delirium::Follow(Body& b) {
         const float* o = &b.m_FollowOff[i * 7];
         const Q s_Wq {w[3], w[4], w[5], w[6]};
         const Q q = Norm(Mul(s_Wq, Q {o[3], o[4], o[5], o[6]}));
-        static_cast<IPhysicsObject*>(s_Bodies[i])->MoveTransform(ToMatrix(q, V(w) + Rot(s_Wq, V(o))));
+        // The game makes its ragdoll where the NPC stands (its animation), up to metres from Homer. Moved there
+        // kinematically in one frame, a body swept through everything at tens of m/s (Billy: bumped and shot NPCs
+        // glitching, jittering, no-clipping): one that far off is put there instead, then followed.
+        const SMatrix s_To = ToMatrix(q, V(w) + Rot(s_Wq, V(o)));
+        IPhysicsObject* s_Obj = static_cast<IPhysicsObject*>(s_Bodies[i]);
+        const SMatrix s_Now = s_Obj->GetTransform();
+
+        if ((SVector3(s_Now.Trans.x, s_Now.Trans.y, s_Now.Trans.z) - SVector3(s_To.Trans.x, s_To.Trans.y, s_To.Trans.z)).Length() > 0.3f)
+            s_Obj->SetTransform(s_To), ++s_Put;
+        else
+            s_Obj->MoveTransform(s_To);
+    }
+
+    static int s_PutLogs = 0;
+
+    if (s_Put && s_PutLogs < 10) {
+        ++s_PutLogs;
+        Logger::Info("[Delirium] {}: {} of its ragdoll's bodies put onto Homer (over 0.3 m off).", b.m_Name, s_Put);
     }
 
     static int s_LostLogs = 0;

@@ -109,3 +109,4 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 85 | Billy 11-16: head-shot NPC fell through the map | log: a far NPC's animator world was 8.5 m above its entity (stale), Homer made in the air. Root now uses the entity when the two are 1.5 m+ apart. Untested. |
 | 86 | Billy 11-16: wireframe as an option again | "Wireframe" checkbox next to Show bodies. |
 | 87 | Billy 11-16: 30 s+ freeze on the first hit; knocked-down runner glitchy on the ground, belly apart from her body after getting up | open: the log shows no long hitch on our side (biggest 110 ms). |
+| 88 | Billy 11-16: bumped/shot NPCs glitch, jitter, no-clip | log: the game makes its ragdoll where the NPC stands (0.5-1 m from Homer, once 16 m), and Follow moved it onto Homer kinematically in one frame (a body sweeping at tens of m/s). A body over 0.3 m from its place on Homer is now put there (SetTransform), then followed as before. Untested. |
