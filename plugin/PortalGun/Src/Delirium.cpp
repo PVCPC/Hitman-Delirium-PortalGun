@@ -713,15 +713,40 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
         float s_Pos[3], s_Rot[4];
         nm_agent_get_part_transform(s_Agents[p], 0, s_Pos, s_Rot);
 
+        // Billy 11-16: he fell over across a floor portal and lay on its rim like a plank (the opening is 1.4 m wide,
+        // he's 1.8 m), then slid off it under the map. Portal 2 has no rim to catch: a body whose middle is over the
+        // opening gets no floor at all, so it drops straight in and its middle goes through inside it.
+        bool s_Drop = false;
+
+        if (m_PortalsOpen) {
+            float s_Com[3], s_Cv[3];
+            nm_agent_get_com(s_Agents[p], s_Com, s_Cv);
+
+            for (const DpFrame& f : m_Portals) {
+                const SVector3 n = Rotate(f.rot, SVector3(0.f, 0.f, 1.f));
+                const float z = dp_local_z(&f, &s_Com);
+
+                if (n.z < 0.7f || z < -0.2f || z > 1.6f)
+                    continue;
+
+                const float s_Below[3] = {f.at[0] + (s_Com[0] - n.x * (z + 0.05f) - f.at[0]) * 0.85f,
+                    f.at[1] + (s_Com[1] - n.y * (z + 0.05f) - f.at[1]) * 0.85f,
+                    f.at[2] + (s_Com[2] - n.z * (z + 0.05f) - f.at[2]) * 0.85f};
+                s_Drop |= dp_crossed(&f, 1.f, &s_Below);
+            }
+        }
+
         {
             const auto it = m_PatchAt.find(s_Agents[p]);
             const SVector3 d = V(s_Pos) - (it != m_PatchAt.end() ? it->second.m_At : SVector3(1e9f, 0.f, 0.f));
 
             if (it != m_PatchAt.end() && SVector3(d.x, d.y, 0.f).Length() < 0.3f && std::abs(d.z) < 0.3f &&
-                it->second.m_Open == m_PortalsOpen && !std::memcmp(it->second.m_Portals, m_Portals, sizeof(it->second.m_Portals)))
+                it->second.m_Open == m_PortalsOpen && it->second.m_Drop == s_Drop &&
+                !std::memcmp(it->second.m_Portals, m_Portals, sizeof(it->second.m_Portals)))
                 continue;
 
             PatchAt& s_At = m_PatchAt[s_Agents[p]];
+            s_At.m_Drop = s_Drop;
             s_At.m_At = V(s_Pos);
             s_At.m_Open = m_PortalsOpen;
             std::memcpy(s_At.m_Portals, m_Portals, sizeof(s_At.m_Portals));
@@ -811,6 +836,9 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
                         s_Near |= Rotate(f.rot, SVector3(0.f, 0.f, 1.f)).z > 0.7f &&
                             std::hypot((A[0] + D[0]) * 0.5f - f.at[0], (A[1] + D[1]) * 0.5f - f.at[1]) < 2.5f &&
                             std::abs((A[2] + D[2]) * 0.5f - f.at[2]) < 1.f;
+
+                if (s_Drop)
+                    continue;
 
                 if (!s_Near) {
                     s_Tris.insert(s_Tris.end(), {a, b, d, a, d, c});
@@ -3122,7 +3150,22 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             const float s_Cp[3] = {s_F.at[0] + (s_C[0] - s_F.at[0]) * s_Pull, s_F.at[1] + (s_C[1] - s_F.at[1]) * s_Pull,
                 s_F.at[2] + (s_C[2] - s_F.at[2]) * s_Pull};
 
-            if (!dp_crossed(&s_F, s_Was[i], &s_Cp))
+            // And a body that got under a floor portal's plane anyway (there's only void under it): through it.
+            bool s_Under = false;
+
+            if (s_Flat) {
+                const float z = dp_local_z(&s_F, &s_C);
+                const SVector3 n = Rotate(s_F.rot, SVector3(0.f, 0.f, 1.f));
+
+                if (z < 0.f && z > -1.5f) { // not someone on the floor under it
+                    const float s_Up[3] = {s_F.at[0] + (s_C[0] - n.x * (z + 0.05f) - s_F.at[0]) * 0.6f,
+                        s_F.at[1] + (s_C[1] - n.y * (z + 0.05f) - s_F.at[1]) * 0.6f,
+                        s_F.at[2] + (s_C[2] - n.z * (z + 0.05f) - s_F.at[2]) * 0.6f};
+                    s_Under = dp_crossed(&s_F, 1.f, &s_Up);
+                }
+            }
+
+            if (!s_Under && !dp_crossed(&s_F, s_Was[i], &s_Cp))
                 continue;
 
             const DpFrame& s_From = m_Portals[i];

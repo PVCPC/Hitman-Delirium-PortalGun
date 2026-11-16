@@ -53,6 +53,7 @@ public:
     struct PatchAt {
         SVector3 m_At;
         bool m_Open;
+        bool m_Drop = false; // over a floor portal's opening: no floor at all
         DpFrame m_Portals[2];
     };
     std::unordered_map<NmAgent*, PatchAt> m_PatchAt;
