@@ -1387,43 +1387,6 @@ void Delirium::Follow(Body& b) {
 
     }
 
-    // Once a run, half a second into a followed ragdoll: the skin's hips (the game ragdoll's pelvis body, which Follow
-    // keeps on our hips) in memory near the character; the first place found is watched for who writes it.
-    static int s_ScanIn = 30;
-
-    if (s_ScanIn > 0 && --s_ScanIn == 0) {
-        for (int i = 0; i < n; ++i) {
-            if (b.m_FollowRig[i] != b.m_PoseHips)
-                continue;
-
-            const SMatrix s_M = static_cast<IPhysicsObject*>(s_Bodies[i])->GetTransform();
-            const float s_At[3] = {s_M.Trans.x, s_M.Trans.y, s_M.Trans.z};
-            uintptr_t s_Found[24] = {}, s_Via[24] = {};
-            const uintptr_t s_Anim = reinterpret_cast<uintptr_t>(static_cast<ZActor*>(b.m_Char)->m_pAnimatedActor);
-            int k = FindNear(reinterpret_cast<uintptr_t>(b.m_Char), 0x1400, s_At, 0.03f, 1, s_Found, s_Via, 0, 24);
-            k = FindNear(s_Anim, 0x1000, s_At, 0.03f, 2, s_Found, s_Via, k, 24);
-            k = FindNear(reinterpret_cast<uintptr_t>(b.m_Anim), 0x1000, s_At, 0.03f, 1, s_Found, s_Via, k, 24);
-            std::string s_List;
-
-            for (int j = 0; j < k; ++j) {
-                const float* f = reinterpret_cast<const float*>(s_Found[j]);
-                s_List += std::format("{:x} (in {:x}: {:.3f} {:.3f} {:.3f}); ", s_Found[j], s_Via[j], f[0], f[1], f[2]);
-            }
-
-            Logger::Info("[Delirium] {}: the skin's hips? pelvis body at {:.3f} {:.3f} {:.3f}; char {}, animated actor {:x}, "
-                "animator {}; {} places: {}", b.m_Name, s_At[0], s_At[1], s_At[2], static_cast<void*>(b.m_Char), s_Anim, static_cast<void*>(b.m_Anim), k, s_List);
-
-            // Not the character's own entity matrix (the root moves with the body too): the first in another object.
-            for (int j = 0; j < k; ++j)
-                if (s_Via[j] != reinterpret_cast<uintptr_t>(b.m_Char) && s_Via[j] != reinterpret_cast<uintptr_t>(b.m_Spatial)) {
-                    Bones::WatchAt(s_Found[j] & ~7ull);
-                    break;
-                }
-
-            break;
-        }
-    }
-
     int s_Lost = 0, s_Put = 0;
 
     for (int i = 0; i < n; ++i) {
