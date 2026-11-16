@@ -1704,6 +1704,22 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
 
     // Homer (or Wilma) fitted to this character's own proportions (Pelican): the keyframe then puts every part
     // exactly on its bone, no length fight (shaking) or baked-in pelvis height (floating). REAL: one world, scale 1.
+    // Billy: the upper chest sat low (neck too long, shoulders low) and stuck out behind the neck. Hitman's spine bones
+    // run near the back and Homer's trunk capsules are centred on the joints: the trunk joints (7-10) forward 4 cm,
+    // the upper chest's lower joint (10) up 8 cm (part 10's centre was 5.91 between 5.85 and 6.08, its top 5 cm under
+    // the mesh's shoulders).
+    {
+        const SMatrix s_E = p_Spatial->GetObjectToWorldMatrix();
+        const SVector3 s_Fwd = SVector3(-s_E.YAxis.x, -s_E.YAxis.y, 0.f).Normalized();
+
+        for (int k = 7; k <= 10; ++k) {
+            s_Joints[k * 3] += s_Fwd.x * 0.05f;
+            s_Joints[k * 3 + 1] += s_Fwd.y * 0.05f;
+        }
+
+        s_Joints[10 * 3 + 2] += 0.10f; // Pelican: toward the j10-j11 midpoint, part 10's top meeting j11
+    }
+
     NmBuild* s_Base = p_Female && m_Wilma ? m_Wilma : m_Build;
     s_Lap("check");
     // A short spine (Hitman: 3 bones for Homer's 4 parts) is spread by Fred's own joint shares in nm_rig_joints
@@ -2375,9 +2391,13 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                     nm_agent_get_part_transform(b.m_Agent, 0, p, q);
                     nm_agent_get_part_velocity(b.m_Agent, 0, v, w);
                     const auto g = m_LastGround.find(b.m_Agent);
-                    Logger::Info("[Delirium] {}: dead, pelvis {:.2f} m over its ground, {:.1f} m/s, 47 {:.1f} m away, collides {}.",
-                        b.m_Name, g != m_LastGround.end() ? p[2] - g->second : -1.f, V(v).Length(), (V(p) - m_Eye).Length(),
-                        b.m_Ragdoll ? "with bodies" : "no");
+                    // Pelican: what NM's own world has under the pelvis (a flat floor rests it at 0.13 m).
+                    const float s_Down[3] = {0.f, 0.f, -1.f};
+                    float s_Dist = -1.f, s_N[3] = {};
+                    nm_world_raycast(m_World, p, s_Down, 3.f, &s_Dist, s_N);
+                    Logger::Info("[Delirium] {}: dead, pelvis {:.2f} m over its ground (the game's), {:.2f} m over NM's (normal z "
+                        "{:.2f}), {:.1f} m/s, 47 {:.1f} m away, awake {}.", b.m_Name, g != m_LastGround.end() ? p[2] - g->second : -1.f,
+                        s_Dist, s_N[2], V(v).Length(), (V(p) - m_Eye).Length(), nm_agent_is_awake(b.m_Agent));
                     ++s_Logs;
                     break;
                 }
