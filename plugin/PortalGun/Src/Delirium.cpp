@@ -2552,7 +2552,35 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 nm_agent_task_balance(b.m_Agent, m_World, b.m_Health < 140.f ? "WEAK" : "*", s_Look);
                 b.m_Stagger = 2.5f;
                 Logger::Info("[Delirium] 47 bumped {} at {:.1f} m/s.", b.m_Name, s_Vel.Length());
+                m_BumpWatch = 2.f, m_BumpAgent = b.m_Agent;
             }
+        }
+
+        // Pelican: Billy's bumps throw NPCs; a plain keyframed walk-into only shoves at the walker's speed (SDK
+        // walked_into_staggers). Each frame for 2 s after a bump (150 lines a run): 47's fastest bone ((now - last) /
+        // dt: a pose jump is a 6-15 m/s hand in NM), the frame time, and the bumped body's pelvis speed.
+        static std::vector<float> s_Last;
+        static int s_Lines = 0;
+        float s_Fast = 0.f;
+        size_t s_FastBone = 0;
+
+        if (s_Last.size() == h->m_Now.size())
+            for (size_t r = 0; r * 7 < h->m_Now.size(); ++r)
+                if (const float v = (V(&h->m_Now[r * 7]) - V(&s_Last[r * 7])).Length() / p_Dt; v > s_Fast)
+                    s_Fast = v, s_FastBone = r;
+
+        s_Last = h->m_Now;
+
+        if (m_BumpWatch > 0.f && s_Lines < 150) {
+            m_BumpWatch -= p_Dt;
+            ++s_Lines;
+            float v[3] = {}, w[3];
+
+            if (std::ranges::any_of(m_Bodies, [&](const Body& o) { return o.m_Agent == m_BumpAgent; }))
+                nm_agent_get_part_velocity(m_BumpAgent, 0, v, w);
+
+            Logger::Info("[Delirium] bump watch: dt {:.4f}, 47's fastest bone {} at {:.1f} m/s, hips {:.1f} m/s; bumped "
+                "pelvis {:.1f} m/s.", p_Dt, h->m_Bones[s_FastBone], s_Fast, s_Vel.Length(), V(v).Length());
         }
     }
 

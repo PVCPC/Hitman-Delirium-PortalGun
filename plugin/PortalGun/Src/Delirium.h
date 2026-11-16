@@ -191,7 +191,9 @@ private:
     std::atomic<int> m_Weapon {0};
     std::mutex m_HitMutex;
     std::vector<void*> m_Hits;
-    std::unordered_map<void*, float> m_Hp; // each NPC's hit points last frame: a drop is a hit (YouGotHit never came)
+    std::unordered_map<void*, float> m_Hp;
+    float m_BumpWatch = 0.f; // seconds left logging a bump frame by frame
+    NmAgent* m_BumpAgent = nullptr; // each NPC's hit points last frame: a drop is a hit (YouGotHit never came)
     void SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facing);
     std::vector<ZEntityRef> m_SpawnedNpcs; // left to the scene's teardown (deleting them first crashed it)
     bool m_WantClear = false;
