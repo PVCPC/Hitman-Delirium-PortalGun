@@ -2537,23 +2537,55 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         // The Playroom's bump (Pelican: niko.rs 287-292, main.rs 3948): no push at all. Faster than 2.5 m/s, within
         // 0.7 m, moving toward a standing NPC: NM balance looking at 47's head ("WEAK" under 140 health), and the
         // body staggers by itself; once per 2.5 s. Lying bodies get nothing (the old per-frame shove flung them).
+        // GTA IV's own answer (Pelican: nm_player_bump, its player-bumps-ped handler), once, the frame 47 first
+        // touches a standing NPC: a shove (balance and ~30 N s at the chest along his facing), a flinch, or nothing.
+        // ponytail: 47 doesn't play a shove or reach his hands onto the chest (IK); add with Hitman's push clip.
+        const auto s_Move = [](float v) { return v < 0.3f ? 1 : v < 2.5f ? 2 : v < 5.f ? 3 : 4; };
+        const SMatrix s_HM = h->m_Spatial->GetObjectToWorldMatrix();
+        const SVector3 s_HF = SVector3(s_HM.YAxis.x, s_HM.YAxis.y, 0.f).Normalized();
+
         for (Body& b : m_Bodies) {
             b.m_Stagger = std::max(0.f, b.m_Stagger - p_Dt);
 
-            if (!b.m_Npc || b.m_Ragdoll || b.m_Recover > 0.f || b.m_Stagger > 0.f || b.m_Now.size() < 3)
+            if (!b.m_Npc || b.m_Now.size() < 3)
                 continue;
 
-            SVector3 s_D = V(b.m_Now.data()) - s_Hips;
+            const SVector3 s_Np = V(b.m_Now.data());
+            const float s_NpV = b.m_HadBumpHips ? (s_Np - b.m_BumpHips).Length() / p_Dt : 0.f;
+            b.m_BumpHips = s_Np, b.m_HadBumpHips = true;
+            SVector3 s_D = s_Np - s_Hips;
             s_D.z = 0.f;
+            const bool s_Touch = s_D.Length() < 0.7f;
 
-            if (s_D.Length() < 0.7f && s_Vel.Length() > 2.5f && s_Vel.Dot(s_D) > 0.f) {
-                SetRagdoll(b, true);
-                const float s_Look[3] = {s_Hips.x, s_Hips.y, s_Hips.z + 0.75f};
-                nm_agent_task_balance(b.m_Agent, m_World, b.m_Health < 140.f ? "WEAK" : "*", s_Look);
-                b.m_Stagger = 2.5f;
-                Logger::Info("[Delirium] 47 bumped {} at {:.1f} m/s.", b.m_Name, s_Vel.Length());
-                m_BumpWatch = 2.f, m_BumpAgent = b.m_Agent;
+            if (!s_Touch || std::exchange(b.m_Touching, s_Touch) || b.m_Ragdoll || b.m_Recover > 0.f || b.m_Stagger > 0.f)
+                continue;
+
+            const SMatrix s_NM = b.m_Spatial->GetObjectToWorldMatrix();
+            const float s_Me[6] = {s_Hips.x, s_Hips.y, s_Hips.z, s_HF.x, s_HF.y, 0.f};
+            const float s_Other[6] = {s_Np.x, s_Np.y, s_Np.z, s_NM.YAxis.x, s_NM.YAxis.y, 0.f};
+            int s_Side = -1, s_Clip = -1;
+            const int s_R = nm_player_bump(m_World, s_Move(s_Vel.Length()), s_Move(s_NpV), s_Me, s_Other, b.m_Health, 1.3f, 1.3f,
+                m_ShovedLast == b.m_Agent ? NM_BUMP_SHOVED_LAST : 0, &s_Side, &s_Clip);
+            Logger::Info("[Delirium] 47 bumped {} at {:.1f} m/s: {} (side {}, clip {}).", b.m_Name, s_Vel.Length(),
+                std::array {"nothing", "shove", "flinch", "knocked over"}[std::clamp(s_R, 0, 3)], s_Side, s_Clip);
+
+            if (s_R == NM_BUMP_NOTHING)
+                continue;
+
+            SetRagdoll(b, true);
+            const float s_Look[3] = {s_Hips.x, s_Hips.y, s_Hips.z + 0.75f};
+            nm_agent_task_balance(b.m_Agent, m_World, b.m_Health < 140.f ? "WEAK" : "*", s_Look);
+
+            if (s_R == NM_BUMP_SHOVE) {
+                float p[3], q[4];
+                nm_agent_get_part_transform(b.m_Agent, 10, p, q);
+                const float s_Push[3] = {s_HF.x * 30.f, s_HF.y * 30.f, 0.f};
+                nm_agent_apply_impulse(b.m_Agent, 10, p, s_Push);
+                m_ShovedLast = b.m_Agent;
             }
+
+            b.m_Stagger = 2.5f;
+            m_BumpWatch = 2.f, m_BumpAgent = b.m_Agent;
         }
 
         // Pelican: Billy's bumps throw NPCs; a plain keyframed walk-into only shoves at the walker's speed (SDK

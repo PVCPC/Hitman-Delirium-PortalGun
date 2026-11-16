@@ -115,6 +115,9 @@ private:
         bool m_Follow = false, m_FollowGone = false;
         float m_Recover = 0.f; // s left of Hitman's own get-up (its powered ragdoll + clip) running
         float m_Stagger = 0.f; // s before 47 can bump this NPC again (the Playroom's STAGGER_TIME)
+        bool m_Touching = false; // 47 within touching distance last frame (nm_player_bump once per touch)
+        SVector3 m_BumpHips; // last frame's hips, for its move state
+        bool m_HadBumpHips = false;
         float m_UpGrace = 0.f; // after Hitman's get-up: its ragdoll flag settles before a new knock-down counts
         void* m_FollowSet = nullptr;     // the ragdoll's body set followed (re-read every frame)
         std::vector<int> m_FollowRig;    // each ragdoll body's rig bone (-1: left to the game)
@@ -193,7 +196,8 @@ private:
     std::vector<void*> m_Hits;
     std::unordered_map<void*, float> m_Hp;
     float m_BumpWatch = 0.f; // seconds left logging a bump frame by frame
-    NmAgent* m_BumpAgent = nullptr; // each NPC's hit points last frame: a drop is a hit (YouGotHit never came)
+    NmAgent* m_BumpAgent = nullptr;
+    NmAgent* m_ShovedLast = nullptr; // GTA shoves each one once in a row // each NPC's hit points last frame: a drop is a hit (YouGotHit never came)
     void SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facing);
     std::vector<ZEntityRef> m_SpawnedNpcs; // left to the scene's teardown (deleting them first crashed it)
     bool m_WantClear = false;
