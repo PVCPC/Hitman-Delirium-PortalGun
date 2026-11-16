@@ -967,7 +967,12 @@ void Delirium::Root(Body& p_Body, float* p_Turn, SVector3& p_P) {
     float x[3], y[3], z[3], t[3];
     int s_Layout = 0;
 
-    if (Bones::World(p_Body.m_Anim, x, y, z, t, s_Layout)) {
+    // Billy: a far NPC shot dead fell through the map. Its animator's world was stale, 8.5 m above its entity (Bobby
+    // Caretaker: -93.49 vs -101.89), so Homer was made in the air and its ragdoll pulled up to him. Not that: the entity.
+    const SMatrix s_E = p_Body.m_Spatial->GetObjectToWorldMatrix();
+
+    if (Bones::World(p_Body.m_Anim, x, y, z, t, s_Layout) &&
+        (SVector3(t[0], t[1], t[2]) - SVector3(s_E.Trans.x, s_E.Trans.y, s_E.Trans.z)).Length() < 1.5f) {
         p_Q = FromAxes(float4(x[0], x[1], x[2], 0.f), float4(y[0], y[1], y[2], 0.f), float4(z[0], z[1], z[2], 0.f));
         p_P = SVector3(t[0], t[1], t[2]);
     }
@@ -2223,6 +2228,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     const SVector3& p_Feet, const SVector3& p_Facing, ZHM5BaseCharacter* p_Hitman, ZSpatialEntity* p_HitmanSpatial) {
     m_Eye = p_Eye;
     m_Aim = p_Aim;
+    m_Clock += p_Dt;
     Bones::Tick();
 
     // Hitman's get-up runs on its powered ragdoll: that isn't a kill (unless it died meanwhile).
@@ -2556,8 +2562,9 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         // ponytail: 47 doesn't play a shove or reach his hands onto the chest (IK); add with Hitman's push clip.
         const auto s_Move = [](float v) { return v < 0.3f ? 1 : v < 2.5f ? 2 : v < 5.f ? 3 : 4; };
         const SMatrix s_HM = h->m_Spatial->GetObjectToWorldMatrix();
-        // Facing: the way he walks when he does (GTA's shove needs the NPC in front: forward . (it - him) > 0).
-        const SVector3 s_HF = s_Vel.Length() > 0.3f ? s_Vel.Normalized() : SVector3(s_HM.YAxis.x, s_HM.YAxis.y, 0.f).Normalized();
+        // Facing: the way he walks when he does (GTA's shove needs the NPC in front: forward . (it - him) > 0). An
+        // entity's Y axis points BACK (log: walking, his velocity . Y was -1.00): forward is -Y.
+        const SVector3 s_HF = s_Vel.Length() > 0.3f ? s_Vel.Normalized() : SVector3(-s_HM.YAxis.x, -s_HM.YAxis.y, 0.f).Normalized();
 
         for (Body& b : m_Bodies) {
             b.m_Stagger = std::max(0.f, b.m_Stagger - p_Dt);
@@ -2578,13 +2585,13 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
             const SMatrix s_NM = b.m_Spatial->GetObjectToWorldMatrix();
             const float s_Me[6] = {s_Hips.x, s_Hips.y, s_Hips.z, s_HF.x, s_HF.y, 0.f};
-            const float s_Other[6] = {s_Np.x, s_Np.y, s_Np.z, s_NM.YAxis.x, s_NM.YAxis.y, 0.f};
+            const float s_Other[6] = {s_Np.x, s_Np.y, s_Np.z, -s_NM.YAxis.x, -s_NM.YAxis.y, 0.f};
             int s_Side = -1, s_Clip = -1;
             const int s_R = nm_player_bump(m_World, s_Move(s_Vel.Length()), s_Move(s_NpV), s_Me, s_Other, b.m_Health, 1.3f, 1.3f,
                 m_ShovedLast == b.m_Agent ? NM_BUMP_SHOVED_LAST : 0, &s_Side, &s_Clip);
             Logger::Info("[Delirium] 47 bumped {} at {:.1f} m/s: {} (side {}, clip {}; health {:.0f}, ahead {:.2f}, its facing "
                 "vs his {:.2f}).", b.m_Name, s_Vel.Length(), std::array {"nothing", "shove", "flinch", "knocked over"}[std::clamp(s_R, 0, 3)],
-                s_Side, s_Clip, b.m_Health, s_HF.Dot(s_D.Normalized()), s_HF.Dot(SVector3(s_HM.YAxis.x, s_HM.YAxis.y, 0.f).Normalized()));
+                s_Side, s_Clip, b.m_Health, s_HF.Dot(s_D.Normalized()), s_HF.Dot(SVector3(-s_HM.YAxis.x, -s_HM.YAxis.y, 0.f).Normalized()));
 
             // GTA's answer is the player's; the bumped body is pushed by the touch itself. Hitman's NPC is on its
             // animation until then, so "nothing" still staggers it at a run (the guide's 2.5 m/s rule).
@@ -2908,7 +2915,11 @@ void Delirium::Draw3D(IRenderer* p_Renderer) {
                     for (const float sg : {-1.f, 1.f}) {
                         const SVector3 n = e[f] * sg, u = e[(f + 1) % 3], v = e[(f + 2) % 3];
                         const SVector4 c = s_Shade(n.Normalized());
-                        p_Renderer->DrawQuad3D(s_C + n - u - v, c, s_C + n + u - v, c, s_C + n + u + v, c, s_C + n - u + v, c);
+                        if (m_Wire)
+                            for (const auto& [a, z2] : {std::pair {-u - v, u - v}, {u - v, u + v}})
+                                p_Renderer->DrawLine3D(s_C + n + a, s_C + n + z2, c, c);
+                        else
+                            p_Renderer->DrawQuad3D(s_C + n - u - v, c, s_C + n + u - v, c, s_C + n + u + v, c, s_C + n - u + v, c);
                     }
 
                 continue;
@@ -2929,7 +2940,15 @@ void Delirium::Draw3D(IRenderer* p_Renderer) {
                     SVector3 n0, n1, n2, n3;
                     const SVector3 p0 = s_Point(k, l, n0), p1 = s_Point(k + 1, l, n1);
                     const SVector3 p2 = s_Point(k + 1, l + 1, n2), p3 = s_Point(k, l + 1, n3);
-                    p_Renderer->DrawQuad3D(p0, s_Shade(n0), p1, s_Shade(n1), p2, s_Shade(n2), p3, s_Shade(n3));
+                    if (m_Wire) { // Billy: the outline as an option (rings and lines along the capsule)
+                        const SVector4 c = s_Shade(n0);
+                        p_Renderer->DrawLine3D(p0, p1, c, c);
+
+                        if (k % 3 == 0)
+                            p_Renderer->DrawLine3D(p0, p3, c, c);
+                    }
+                    else
+                        p_Renderer->DrawQuad3D(p0, s_Shade(n0), p1, s_Shade(n1), p2, s_Shade(n2), p3, s_Shade(n3));
                 }
         }
     }
@@ -2940,6 +2959,8 @@ void Delirium::DrawMenu() {
     ImGui::Checkbox("47's Homer body (bumps peds; ragdolls only in floor portals)", &m_HitmanBody);
     ImGui::SameLine();
     ImGui::Checkbox("Show bodies", &m_ShowBodies);
+    ImGui::SameLine();
+    ImGui::Checkbox("Wireframe", &m_Wire);
 
     if (ImGui::Checkbox("47 invincible", &m_Invincible))
         m_CrippleDirty = true;
@@ -3125,6 +3146,12 @@ static float NearestPart(NmAgent* a, const SVector3& p_Eye, const SVector3& p_Di
 }
 
 void Delirium::ShootAtAim(Body& b) {
+    // Billy: one pistol shot sent them flying. A first hit could be shot twice in one frame: by the game's ragdoll
+    // (m_Hit still 0) and then by its hit-point drop. One shot per body per 0.1 s.
+    if (m_Clock - b.m_ShotAt < 0.1f)
+        return;
+
+    b.m_ShotAt = m_Clock;
     int s_Part = 0;
     float s_At[3] = {};
     NearestPart(b.m_Agent, m_Eye, m_Aim, s_Part, s_At);

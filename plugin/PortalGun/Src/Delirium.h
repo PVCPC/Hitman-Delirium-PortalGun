@@ -74,6 +74,8 @@ public:
     bool m_HitmanRagdoll = false;
     bool m_HitmanBody = true; // 47 always has his body (to bump peds); ragdoll only in a floor portal (Dive)
     bool m_ShowBodies = true;
+    bool m_Wire = false; // bodies drawn as outlines
+    float m_Clock = 0.f; // seconds of Update
 
 private:
     struct Ped {
@@ -115,6 +117,7 @@ private:
         bool m_Follow = false, m_FollowGone = false;
         float m_Recover = 0.f; // s left of Hitman's own get-up (its powered ragdoll + clip) running
         float m_Stagger = 0.f; // s before 47 can bump this NPC again (the Playroom's STAGGER_TIME)
+        float m_ShotAt = -1.f; // m_Clock of its last shot (one per 0.1 s)
         bool m_Touching = false; // 47 within touching distance last frame (nm_player_bump once per touch)
         SVector3 m_BumpHips; // last frame's hips, for its move state
         bool m_HadBumpHips = false;
