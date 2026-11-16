@@ -2639,6 +2639,25 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             m_BumpWatch = 2.f, m_BumpAgent = b.m_Agent;
         }
 
+        // Billy: shot NPCs don't stagger or grab like the Playroom's. Every 0.25 s for 6 s: the shot task running,
+        // the pelvis over NM's ground, the feet touching (Pelican's checks: health, ground under the feet, task stopped).
+        if (m_ShotWatch > 0.f && (m_ShotWatch -= p_Dt, (m_ShotLog -= p_Dt) <= 0.f)) {
+            m_ShotLog = 0.25f;
+
+            for (const Body& b : m_Bodies) {
+                if (b.m_Agent != m_ShotAgent)
+                    continue;
+
+                float p[3], q[4], s_Dist = -1.f, s_N[3];
+                const float s_Down[3] = {0.f, 0.f, -1.f};
+                nm_agent_get_part_transform(b.m_Agent, 0, p, q);
+                nm_world_raycast(m_World, p, s_Down, 3.f, &s_Dist, s_N);
+                Logger::Info("[Delirium] shot watch {}: task {}, pelvis {:.2f} m over NM's ground, feet contact {:#x} {:#x}, "
+                    "ragdoll {}, health {:.0f}.", b.m_Name, nm_agent_task_running(b.m_Agent), s_Dist,
+                    nm_agent_get_part_contact(b.m_Agent, 3), nm_agent_get_part_contact(b.m_Agent, 6), b.m_Ragdoll, b.m_Health);
+            }
+        }
+
         // Pelican: Billy's bumps throw NPCs; a plain keyframed walk-into only shoves at the walker's speed (SDK
         // walked_into_staggers). Each frame for 2 s after a bump (150 lines a run): 47's fastest bone ((now - last) /
         // dt: a pose jump is a 6-15 m/s hand in NM), the frame time, and the bumped body's pelvis speed.
@@ -3218,6 +3237,9 @@ void Delirium::ShootAtAim(Body& b) {
     }
     else {
         const float s_Left = nm_agent_shoot_weapon(b.m_Agent, m_World, s_W, s_Part, s_At, s_Dir, b.m_Health);
+        // Pelican: under 100 he goes down, under 50 dead; a stagger needs ~200. The health in and out, then 6 s of the task.
+        Logger::Info("[Delirium] {}: shot ({} on part {}), health {:.0f} > {:.0f}.", b.m_Name, s_Gun, s_Part, b.m_Health, s_Left);
+        m_ShotWatch = 6.f, m_ShotAgent = b.m_Agent, m_ShotLog = 0.f;
 
         if (s_Left >= 0.f)
             b.m_Health = s_Left;

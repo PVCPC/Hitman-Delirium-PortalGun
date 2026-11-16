@@ -204,6 +204,8 @@ private:
     std::unordered_map<void*, float> m_Pending; // shot, no body yet (Attach failed): seconds left to retry
     float m_BumpWatch = 0.f; // seconds left logging a bump frame by frame
     NmAgent* m_BumpAgent = nullptr;
+    float m_ShotWatch = 0.f, m_ShotLog = 0.f; // seconds left logging a shot's reaction
+    NmAgent* m_ShotAgent = nullptr;
     NmAgent* m_ShovedLast = nullptr; // GTA shoves each one once in a row // each NPC's hit points last frame: a drop is a hit (YouGotHit never came)
     void SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facing);
     std::vector<ZEntityRef> m_SpawnedNpcs; // left to the scene's teardown (deleting them first crashed it)
