@@ -1833,6 +1833,28 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         const float s_Arm = nm_agent_get_joint_angle(b.m_Agent, 14, s_Ang);
         Logger::Info("[Delirium] {}: parts put on the bind pose before the rig (furthest was part {}, {:.2f} m off; "
             "upper arm at {:.2f} of its range).", p_Name, s_WorstPart, s_Worst, s_Arm);
+
+        // Billy: head and neck the right shape but not lined up. Once a run: neck and head parts' centres and long
+        // axes against joints 11 (neck) and 12 (head), in the neck's line's terms (along / off it).
+        static bool s_HeadLogged;
+
+        if (!std::exchange(s_HeadLogged, true)) {
+            const SVector3 j11 = V(&s_Joints[11 * 3]), j12 = V(&s_Joints[12 * 3]);
+            const SVector3 s_Line = (j12 - j11).Normalized();
+            std::string s_H;
+
+            for (int s_Pt : {10, 11, 12}) {
+                float p[3], q[4];
+                nm_build_part_frame(b.m_Build, s_Pt, p, q);
+                const SVector3 d = V(p) - j12, s_Y = Rot(Q {q[0], q[1], q[2], q[3]}, SVector3(0.f, 1.f, 0.f));
+                const float s_Along = d.Dot(s_Line);
+                s_H += std::format("part {}: centre {:.3f} m along the neck past joint 12, {:.3f} m off its line, axis {:.0f} deg "
+                    "off it; ", s_Pt, s_Along, (d - s_Line * s_Along).Length(),
+                    std::acos(std::min(1.f, std::abs(s_Y.Dot(s_Line)))) * 57.2958f);
+            }
+
+            Logger::Info("[Delirium] {}: head check: neck line joint 11 > 12 {:.3f} m; {}", p_Name, (j12 - j11).Length(), s_H);
+        }
     }
 
     s_Lap("agent");
