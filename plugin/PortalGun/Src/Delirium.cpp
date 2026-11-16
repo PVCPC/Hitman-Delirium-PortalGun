@@ -793,7 +793,8 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
                     s_Verts.insert(s_Verts.end(), {v.x, v.y, w.m_Floor + sz});
                 }
 
-            // NM's triangles collide on both sides (Pelican): one winding each.
+            // NM's triangles block one side only, the side (v1-v0)x(v2-v0) faces (Pelican): every face here points out of
+            // the slab (front toward the body, back away, top up, ends sideways); the ground's point up.
             const uint32_t f0 = s_Base, f1 = s_Base + 1, f2 = s_Base + 2, f3 = s_Base + 3;
             const uint32_t b0 = s_Base + 4, b1 = s_Base + 5, b2 = s_Base + 6, b3 = s_Base + 7;
             s_Tris.insert(s_Tris.end(), {f0, f1, f2, f0, f2, f3, b0, b2, b1, b0, b3, b2, f3, f2, b2, f3, b2, b3, f0, f3, b3,
