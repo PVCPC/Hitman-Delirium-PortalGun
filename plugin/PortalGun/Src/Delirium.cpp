@@ -1693,6 +1693,16 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
             [&] { std::string w; return Bones::BindPose(s_Rig, n, w).empty() ? std::string("not found") : w; }());
     }
 
+    // Pelican: the head takes its neck's length (joint 11 to 12). With neck and neck1 both on 11, the upper one could
+    // become joint 11: a short neck shrank and sank the head (Billy: his head in his neck). Only the lower neck on 11.
+    for (int r = 0; r < s_N; ++r)
+        if (s_Map[r] == 11 && _stricmp(s_Names[b.m_Bones[r]].c_str(), "neck1") == 0)
+            for (int q = 0; q < s_N; ++q)
+                if (s_Map[q] == 11 && _stricmp(s_Names[b.m_Bones[q]].c_str(), "neck") == 0) {
+                    s_Map[r] = -1;
+                    break;
+                }
+
     float s_Joints[63];
 
     if (nm_rig_joints(s_N, s_RigParents.data(), s_Places.data(), s_Map.data(), s_Joints) < 0) {
