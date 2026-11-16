@@ -1728,7 +1728,9 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         const SMatrix s_E = p_Spatial->GetObjectToWorldMatrix();
         const SVector3 s_Fwd = SVector3(-s_E.YAxis.x, -s_E.YAxis.y, 0.f).Normalized();
 
-        for (int k = 7; k <= 10; ++k) {
+        // Billy (side view): still a rack at 2 cm. The bulge is the mid chest (parts 8-9): only the upper chest's joint
+        // (10, the hump behind the neck) goes forward now.
+        for (int k = 10; k <= 10; ++k) {
             // Billy: 5 cm gave him a rack (the chest out past the suit's front): 2.
             s_Joints[k * 3] += s_Fwd.x * 0.02f;
             s_Joints[k * 3 + 1] += s_Fwd.y * 0.02f;
