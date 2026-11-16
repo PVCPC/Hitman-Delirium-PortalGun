@@ -532,13 +532,19 @@ bool Delirium::BodyAt(const SVector3& p_At) const {
             int s_Bn[64];
             void* s_Set = nullptr;
             const int n = ReadRagdoll(b.m_Char, &s_Set, s_Rb, s_Bn);
+            float s_Low = 1e9f;
+
+            for (int i = 0; i < n; ++i)
+                s_Low = std::min(s_Low, static_cast<IPhysicsObject*>(s_Rb[i])->GetTransform().Trans.z);
 
             for (int i = 0; i < n; ++i) {
                 const float4 t = static_cast<IPhysicsObject*>(s_Rb[i])->GetTransform().Trans;
 
-                // Only a hit on top of a body (over its centre): the floor beside or under its feet is ground
-                // (Billy's next run: the floor by the feet skipped, his ground 0.5 m under the street, fell through).
-                if ((SVector3(t.x, t.y, t.z) - p_At).Length() < 0.35f && p_At.z > t.z - 0.03f)
+                // Near a body and over the ragdoll's lowest body: the body. The floor under and beside the feet is
+                // under it (run 4: the floor by the feet skipped, fell through). Run 7: a ray started inside the
+                // pelvis reported its underside (under the pelvis's centre, so "not on top"): floor at the pelvis
+                // under 5 of 11 shots (Samir_Chandra-1794868319101 5.86 on a 4.95 street).
+                if ((SVector3(t.x, t.y, t.z) - p_At).Length() < 0.35f && p_At.z > s_Low + 0.1f)
                     return true;
             }
         }
