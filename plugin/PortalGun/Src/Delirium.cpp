@@ -1088,6 +1088,8 @@ void Delirium::Root(Body& p_Body, float* p_Turn, SVector3& p_P) {
         p_P = SVector3(s_M.Trans.x, s_M.Trans.y, s_M.Trans.z);
     }
 
+    p_P = p_P + p_Body.m_RootFix;
+
     if (p_Body.m_Layout != s_Layout) {
         p_Body.m_Layout = s_Layout;
         const SMatrix s_M = p_Body.m_Spatial->GetObjectToWorldMatrix();
@@ -1835,6 +1837,34 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
     if (!Posed(b))
         return false;
 
+    // Billy: NPCs killed by a first headshot, before they had a body, teleported up. Hitman's death ragdoll had
+    // already moved its root (to the pelvis): the animated bones read 0.9 m over where the NPC is (Samir_Chandra,
+    // Herbert_West: pelvis body z 5.91, bones' hips 6.79), and Homer was made there. Its own ragdoll's pelvis is
+    // where the NPC is: the root moved back by the gap while this body has it.
+    if (p_Npc && b.m_PartRig[0] >= 0) {
+        void* s_Rb[c_MaxRagdollBodies];
+        int s_Bn[c_MaxRagdollBodies];
+        void* s_Set = nullptr;
+        const int s_Bone = b.m_Bones[b.m_PartRig[0]];
+
+        for (int i = 0, n = ReadRagdoll(b.m_Char, &s_Set, s_Rb, s_Bn); i < n; ++i)
+            if (s_Bn[i] == s_Bone) {
+                const float4 t = static_cast<IPhysicsObject*>(s_Rb[i])->GetTransform().Trans;
+                const SVector3 s_Gap = SVector3(t.x, t.y, t.z) - V(&b.m_Now[b.m_PartRig[0] * 7]);
+
+                if (s_Gap.Length() > 0.2f && s_Gap.Length() < 3.f) {
+                    b.m_RootFix = s_Gap;
+                    Logger::Info("[Delirium] {}: the game's ragdoll was on first; its bones {:.2f} m off its pelvis "
+                        "(z {:+.2f}): moved onto it.", p_Name, s_Gap.Length(), s_Gap.z);
+
+                    if (!Posed(b))
+                        return false;
+                }
+
+                break;
+            }
+    }
+
     const int s_N = static_cast<int>(b.m_Bones.size());
     std::vector<float> s_Places(s_N * 3);
 
@@ -2200,6 +2230,7 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
     else {
         // Back on his animation from where it is now, blended from the ragdoll's last pose (the get-up).
         Bones::Override(b->m_Anim, {});
+        b->m_RootFix = SVector3(0.f, 0.f, 0.f); // the game's ragdoll goes off: its root is its own again
         Down(b->m_Char, false);
 
         // The game's ragdoll (made at the knock-down) off: its bodies let go, then the game's own deactivate.
@@ -2315,11 +2346,18 @@ void Delirium::UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet) {
 
     std::ranges::sort(s_Near, {}, &std::pair<float, TEntityRef<ZActor>>::first);
 
+    // Billy: Numpad 1 has to give a body to whoever 47 walks up to, anywhere, not just those near him when he pressed
+    // it. Bodies went to the first 6 within 25 m and stayed theirs while they were there: walking on, the ones he
+    // reached got none. Only the 6 nearest (within 15 m) standing ones keep theirs.
+    std::vector<void*> s_Want;
+
+    for (const auto& [s_D, s_Actor] : s_Near)
+        if (s_Want.size() < c_MaxNpcs && s_D <= 15.f && !s_Actor.m_pInterfaceRef->IsDead())
+            s_Want.push_back(s_Actor.m_pInterfaceRef);
+
     std::erase_if(m_Bodies, [&](Body& b) {
         // A body that's down stays on (shot from afar).
-        const bool s_Keep = !b.m_Npc || b.m_Ragdoll || std::ranges::any_of(s_Near, [&](const auto& n) {
-            return n.second.m_pInterfaceRef == b.m_Char;
-        });
+        const bool s_Keep = !b.m_Npc || b.m_Ragdoll || b.m_Dead || b.m_Ko || std::ranges::find(s_Want, b.m_Char) != s_Want.end();
 
         if (!s_Keep)
             Detach(b);
@@ -2488,8 +2526,14 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
             if (!b.m_Ragdoll && !b.m_Dead && !static_cast<ZActor*>(b.m_Char)->IsDead()) {
                 SetRagdoll(b, true);
+                // Billy: a can thrown at a head; Hitman ragdolled him (dazed, out cold) with no hit points lost, and
+                // Delirium took it for a pistol shot: Homer balanced. No damage: a thrown object's knock.
+                const auto h = m_Hp.find(b.m_Char);
+                const bool s_NoDamage = h != m_Hp.end() && static_cast<ZActor*>(b.m_Char)->m_fCurrentHitPoints >= h->second - 0.01f;
 
-                if (b.m_Hit == 0)
+                if (s_NoDamage)
+                    Knock(b);
+                else if (b.m_Hit == 0)
                     ShootAtAim(b);
             }
 
@@ -2629,15 +2673,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 SetRagdoll(b, true);
 
                 if (std::ranges::find(s_Throws, c) != s_Throws.end()) {
-                    // Thrown at: a push at the chest from 47's side (about a shove's), NM's balance tries and loses.
-                    float p[3], q[4];
-                    nm_agent_get_part_transform(b.m_Agent, 9, p, q);
-                    SVector3 d(p[0] - m_Eye.x, p[1] - m_Eye.y, 0.f);
-                    d = d.Length() > 0.01f ? d.Normalized() : SVector3(1.f, 0.f, 0.f);
-                    const float s_Imp[3] = {d.x * 45.f, d.y * 45.f, 0.f};
-                    nm_agent_apply_push(b.m_Agent, p, s_Imp);
-                    b.m_Ko = true;
-                    Logger::Info("[Delirium] {}: knocked out by a thrown object; off balance.", b.m_Name);
+                    Knock(b);
                     continue;
                 }
 
@@ -2740,7 +2776,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     // Billy: 47 goes ragdoll only falling into a floor portal (Dive); Numpad 2 only puts his body on.
 
     if ((m_NpcTimer -= p_Dt) <= 0.f) {
-        m_NpcTimer = 1.f;
+        m_NpcTimer = 0.25f; // one new body a call: walking up to people, theirs came a second apart
 
         if (m_NpcMode || std::ranges::any_of(m_Bodies, [](const Body& b) { return b.m_Npc; }))
             UpdateNpcs(p_Ray, p_Feet);
@@ -3087,15 +3123,13 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         b.m_SettledT = !b.m_HighFall && nm_agent_is_settled(b.m_Agent) == 1 ? b.m_SettledT + p_Dt : 0.f;
         const bool s_Settled = b.m_SettledT > 1.5f;
 
-        // Knocked out: no get-up; once down, limp (Hitman has him unconscious).
+        // Knocked out: dazed a moment (the push, his balance staggering), then out: limp, he falls over and stays
+        // down (Billy: "they just lose balance and fall over"; Hitman has him unconscious). No get-up.
         if (b.m_Ko) {
-            float s_H[3];
-            int32_t s_Up = 0;
-
-            if (nm_agent_get_lying(b.m_Agent, s_H, &s_Up) > 0.5f && !b.m_Dead) {
+            if ((b.m_KoT += p_Dt) > 0.6f && !b.m_Dead) {
                 nm_agent_set_dead(b.m_Agent, 1);
                 b.m_Dead = true;
-                Logger::Info("[Delirium] {}: down, out cold.", b.m_Name);
+                Logger::Info("[Delirium] {}: out cold, falls.", b.m_Name);
             }
 
             continue;
@@ -3489,6 +3523,19 @@ static float NearestPart(NmAgent* a, const SVector3& p_Eye, const SVector3& p_Di
     }
 
     return s_Best;
+}
+
+void Delirium::Knock(Body& b) {
+    // A push at the chest from 47's side (about a shove's): NM's balance staggers.
+    float p[3], q[4];
+    nm_agent_get_part_transform(b.m_Agent, 9, p, q);
+    SVector3 d(p[0] - m_Eye.x, p[1] - m_Eye.y, 0.f);
+    d = d.Length() > 0.01f ? d.Normalized() : SVector3(1.f, 0.f, 0.f);
+    const float s_Imp[3] = {d.x * 45.f, d.y * 45.f, 0.f};
+    nm_agent_apply_push(b.m_Agent, p, s_Imp);
+    b.m_Ko = true;
+    b.m_KoT = 0.f;
+    Logger::Info("[Delirium] {}: knocked out by a thrown object; off balance.", b.m_Name);
 }
 
 void Delirium::ShootAtAim(Body& b) {

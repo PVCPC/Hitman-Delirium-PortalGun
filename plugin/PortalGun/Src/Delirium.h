@@ -103,7 +103,9 @@ private:
         float m_GetUpTime = 0.f;
         bool m_HighFall = false;
         float m_SettledT = 0.f; // s standing still on its feet while a ragdoll
-        bool m_Ko = false;
+        bool m_Ko = false;      // knocked out by a thrown object: loses balance, falls, stays down
+        float m_KoT = 0.f;      // s since the knock (dazed, then out: limp)
+        SVector3 m_RootFix;     // the engine's root was already moved by the game's ragdoll as it got its body
         int m_FollowLogs = 0;   // per-frame follow lines logged (first 12 after each ragdoll start)      // knocked out by a thrown object: loses balance, falls, stays down
         std::vector<float> m_PoseA, m_PoseB; // the last two stepped poses (nm_rig_pose)
         int m_PoseHips = -1;
@@ -196,6 +198,7 @@ private:
     ZEntityRef m_Cripple;
     void UpdateCripple();
     void ShootAtAim(Body& b);
+    void Knock(Body& b); // a thrown object: off balance, then out cold
     void Follow(Body& b);
 public:
     // 47 fired a gun (eWeaponType) / something hit a character: from the game's hooks, any thread.
