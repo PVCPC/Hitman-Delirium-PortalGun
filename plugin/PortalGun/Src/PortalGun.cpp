@@ -916,6 +916,12 @@ void PortalGun::UpdateFlight(ZSpatialEntity* p_Hitman, SMatrix& p_Trans, float p
 
     // Air control, like Portal: WASD relative to where the camera looks, at walking speed.
     // (The game snaps an airborne 47 to the nearest floor, so his own movement can't be used.)
+    const SVector3 s_Wish = Wish();
+    const float s_WishSpeed = s_Wish.Length() > 0.01f ? c_WalkSpeed : 0.f;
+
+    // CGameMovement::FullWalkMove in the air: half gravity, AirMove, move, half gravity.
+    m_FlyVel.z -= c_Gravity * 0.5f * p_Dt;
+#if 0
     const float s_FMove = (Functions::ZInputAction_Digital->Call(&m_FwdAction, -1) ? 1.f : 0.f) -
         (Functions::ZInputAction_Digital->Call(&m_BackAction, -1) ? 1.f : 0.f);
     const float s_SMove = (Functions::ZInputAction_Digital->Call(&m_RightAction, -1) ? 1.f : 0.f) -
@@ -933,10 +939,7 @@ void PortalGun::UpdateFlight(ZSpatialEntity* p_Hitman, SMatrix& p_Trans, float p
         }
     }
 
-    const float s_WishSpeed = s_Wish.Length() > 0.01f ? c_WalkSpeed : 0.f;
-
-    // CGameMovement::FullWalkMove in the air: half gravity, AirMove, move, half gravity.
-    m_FlyVel.z -= c_Gravity * 0.5f * p_Dt;
+#endif
 
     if (s_WishSpeed > 0.01f)
         AirAccelerate(m_FlyVel, s_Wish.Normalized(), s_WishSpeed, p_Dt);
@@ -1344,10 +1347,45 @@ bool PortalGun::TryTeleport(Portal& p_In, Portal& p_Out, ZSpatialEntity* p_Hitma
     if (!s_HadPrev || m_Cooldown > 0.f)
         return false;
 
-    // Walls: fire on entering the volume from the front, never from behind the surface.
     // Floors: he drops through the carved hole and fires when his feet cross the plane.
     const bool s_FloorPortal = s_InTrans.YAxis.z > c_FloorNormalZ;
-    bool s_Enter = !s_FloorPortal && s_Inside && !s_WasInside && s_PrevSide >= -0.05f;
+    const bool s_WallPortal = std::abs(s_InTrans.YAxis.z) <= c_FloorNormalZ;
+    bool s_Enter = false;
+    SMatrix s_From = p_PlayerTrans;
+
+    // Billy 11-16 (Portal 2, not a teleporter): walls. He walks into the opening; the wall's collision stops him
+    // 0.3 m short, so from there we carry him on at walking speed while he walks toward it, and he goes through when
+    // his middle crosses the surface, coming out just in front of the other one (0.35 m on, not the old 1 m jump).
+    if (s_WallPortal && !m_Flying) {
+        const SVector3 s_N = ToVec3(s_InTrans.YAxis);
+        const SVector3 s_W = Wish();
+        const bool s_Toward = s_W.Length() > 0.01f && s_W.Normalized().Dot(s_N) < -0.3f;
+
+        if (m_WalkIn != &p_In && s_Inside && s_Local.y >= 0.f && s_PrevSide >= -0.05f && s_Toward) {
+            m_WalkIn = &p_In;
+            m_WalkInY = s_Local.y;
+        }
+
+        if (m_WalkIn == &p_In) {
+            if (!s_Toward || !InsideOval(s_Local3, 0.25f)) {
+                m_WalkIn = nullptr; // turned away: the game has him again
+                return false;
+            }
+
+            m_WalkInY -= c_WalkSpeed * m_Dt;
+            const float s_Push = m_WalkInY - s_Local.y; // where the game put him -> where we carry him
+            s_From.Trans = s_From.Trans + float4(s_N * s_Push, 0.f);
+
+            if (m_WalkInY > 0.f) {
+                p_Hitman->SetObjectToWorldMatrixFromEditor(s_From);
+                p_In.m_PrevSide = m_WalkInY;
+                return false;
+            }
+
+            m_WalkIn = nullptr;
+            s_Enter = true;
+        }
+    }
 
     // In flight he can move further than the volume is deep in one frame (a long fall into a floor
     // portal). Then fire if the step from last frame crossed the plane inside the oval.
@@ -1372,7 +1410,7 @@ bool PortalGun::TryTeleport(Portal& p_In, Portal& p_Out, ZSpatialEntity* p_Hitma
 
     SVector3 s_OutVel = MapDirection(s_InVel, s_InTrans, p_Out.m_Transform);
 
-    SMatrix s_NewTrans = ExitTransform(p_PlayerTrans, s_InTrans, p_Out.m_Transform);
+    SMatrix s_NewTrans = ExitTransform(s_From, s_InTrans, p_Out.m_Transform);
 
     // Leaving a floor portal: at least enough upward speed to clear the opening.
     const SVector3 s_OutNormal = ToVec3(p_Out.m_Transform.YAxis);
@@ -1497,7 +1535,7 @@ SMatrix PortalGun::ExitTransform(const SMatrix& p_PlayerTrans, const SMatrix& p_
         else {
             s_Feet = ToVec3(s_Mapped.Trans);
             const float s_Depth = (s_Feet - s_OutCentre).Dot(s_OutNormal);
-            s_Feet = s_Feet + s_OutNormal * (c_ExitPush - s_Depth);
+            s_Feet = s_Feet + s_OutNormal * (c_CapsuleRadius + 0.05f - s_Depth); // just clear of the wall
             s_Feet.z = std::clamp(s_Feet.z, s_Bottom, s_OutCentre.z);
         }
     }
@@ -1508,6 +1546,25 @@ SMatrix PortalGun::ExitTransform(const SMatrix& p_PlayerTrans, const SMatrix& p_
         float4(s_WorldUp, 0.f),
         float4(s_Feet, 1.f)
     );
+}
+
+SVector3 PortalGun::Wish() {
+    // WASD relative to where the camera looks, flat.
+    const SVector3 s_Up(0.f, 0.f, 1.f);
+    const float s_FMove = (Functions::ZInputAction_Digital->Call(&m_FwdAction, -1) ? 1.f : 0.f) -
+        (Functions::ZInputAction_Digital->Call(&m_BackAction, -1) ? 1.f : 0.f);
+    const float s_SMove = (Functions::ZInputAction_Digital->Call(&m_RightAction, -1) ? 1.f : 0.f) -
+        (Functions::ZInputAction_Digital->Call(&m_LeftAction, -1) ? 1.f : 0.f);
+
+    if (const auto s_Camera = Functions::GetCurrentCamera->Call()) {
+        const SMatrix s_Cam = s_Camera->GetObjectToWorldMatrix();
+        SVector3 s_Fwd;
+
+        if (FlattenOnto(ToVec3(s_Cam.CameraBackward) * -1.f, s_Up, s_Fwd))
+            return s_Fwd * s_FMove + s_Fwd.Cross(s_Up) * s_SMove;
+    }
+
+    return SVector3(0.f, 0.f, 0.f);
 }
 
 SMatrix PortalGun::MapThroughPortal(const SMatrix& p_World, const SMatrix& p_In, const SMatrix& p_Out) {

@@ -232,6 +232,11 @@ private:
     bool m_HasPrevFeet = false;
     SVector3 m_WalkVel;
 
+    // Walking into a wall portal: the wall stops him 0.3 m short, so we carry him the rest (his depth in front of it).
+    const void* m_WalkIn = nullptr;
+    float m_WalkInY = 0.f;
+    SVector3 Wish();
+
     // The portal gun item (SMF repository entry, see smf/PortalGun).
     ZRepositoryID m_GunId;
     bool m_RequestGive = false;
