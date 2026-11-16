@@ -693,7 +693,7 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
                 float s_Z = s_Last->second;
 
                 // (A middle ray from the pelvis hit the inside of its game ragdoll: a spike of floor at the pelvis
-                // under 8 of Billy's 20 run-5 shots. Ground rays are the level's static geometry now.)
+                // under 8 of Billy's 20 run-5 shots. Rays from above; RayCastLevel skips characters and ragdoll tops.)
                 if (p_Ray(s_Top, s_Top - SVector3(0.f, 0.f, 4.f), s_Hit, s_Normal)) {
                     s_Z = s_Hit.z;
 
