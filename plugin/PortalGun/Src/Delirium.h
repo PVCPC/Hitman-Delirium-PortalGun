@@ -57,7 +57,8 @@ public:
     };
     std::unordered_map<NmAgent*, PatchAt> m_PatchAt;
     bool m_HitmanTouches = false; // 47's body in NM's contacts (a downed NPC near him)
-    bool BodyAt(const SVector3& p_At) const; // a point on a downed NPC (its game ragdoll's bodies sit on its NM body)
+    bool BodyAt(const SVector3& p_At) const;
+    bool IsRagdollObject(const void* p_Proxy) const; // a ray's hit physics object is one of a body's game ragdoll's // a point on a downed NPC (its game ragdoll's bodies sit on its NM body)
     // The linked pair (null: not both open), for ragdolls going through and the holes in the ground.
     void SetPortals(const DpFrame* p_Frames);
 

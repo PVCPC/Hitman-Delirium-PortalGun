@@ -518,6 +518,47 @@ bool Delirium::Start() {
 
 // The game's ragdoll bodies are moved onto each downed NPC's NM body: a ground ray that hits them laid NM's ground on
 // the body itself, which threw it up and dropped it again every scan ("flying up and down").
+// The ray's hit (a ZPhysicsObjectRef's proxy) against a ragdoll body: the proxy itself, or a pointer in its first
+// 0x80 bytes (its object). Raw reads under __try.
+static bool ProxyIs(const void* p_Proxy, const void* p_Body) {
+    if (p_Proxy == p_Body)
+        return true;
+
+    __try {
+        const void* const* p = static_cast<const void* const*>(p_Proxy);
+
+        for (int i = 0; i < 16; ++i)
+            if (p[i] == p_Body)
+                return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+
+    return false;
+}
+
+bool Delirium::IsRagdollObject(const void* p_Proxy) const {
+    for (const Body& b : m_Bodies) {
+        if (!b.m_Char)
+            continue;
+
+        void* s_Rb[64];
+        int s_Bn[64];
+        void* s_Set = nullptr;
+        const int n = ReadRagdoll(b.m_Char, &s_Set, s_Rb, s_Bn);
+
+        for (int i = 0; i < n; ++i)
+            if (ProxyIs(p_Proxy, s_Rb[i])) {
+                static int s_Logs = 0;
+
+                if (s_Logs++ < 3)
+                    Logger::Info("[Delirium] Ground ray hit {}'s game ragdoll (by its physics object): skipped.", b.m_Name);
+                return true;
+            }
+    }
+
+    return false;
+}
+
 bool Delirium::BodyAt(const SVector3& p_At) const {
     for (const Body& b : m_Bodies) {
         if (!b.m_Agent || !b.m_Char)

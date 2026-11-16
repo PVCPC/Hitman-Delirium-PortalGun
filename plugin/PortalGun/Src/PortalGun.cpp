@@ -1136,6 +1136,14 @@ bool PortalGun::RayCast(
         if (!s_Ignored && g_LevelOnly && s_Output.m_pBlockingSpatialEntity.m_pInterfaceRef)
             s_Ignored = IsCharacter(s_Output.m_pBlockingSpatialEntity.m_entityRef, ToVec3(s_Output.m_vPosition));
 
+        // Billy: "just use the level's geometry". What the hit belongs to: an NPC (its entity or one under it) or one
+        // of a body's game ragdoll's physics objects is never ground. Then by place (BodyAt) for what slips past.
+        if (!s_Ignored && g_LevelOnly && s_Output.m_BlockingEntity)
+            s_Ignored = IsCharacter(s_Output.m_BlockingEntity, ToVec3(s_Output.m_vPosition));
+
+        if (!s_Ignored && g_LevelOnly && g_RayBodies && s_Output.m_pBlockingPhysicsObject.m_pProxy)
+            s_Ignored = g_RayBodies->IsRagdollObject(s_Output.m_pBlockingPhysicsObject.m_pProxy);
+
         if (!s_Ignored && g_LevelOnly)
             s_Ignored = g_RayBodies && g_RayBodies->BodyAt(ToVec3(s_Output.m_vPosition));
 
