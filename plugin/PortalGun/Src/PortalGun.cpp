@@ -1430,7 +1430,8 @@ void PortalGun::TurnCamera(const SMatrix& p_In, const SMatrix& p_Out) {
         *reinterpret_cast<float*>(s_Tp + 0x3e0) = s_Pitch;
     }
 
-    s_Tp[0x210] = 1;
+    // Not +0x210: its reset (HITMAN3+740980) starts a blend from the old view (+0x830 time, +0x834 on), the slow pan
+    // across the map Billy saw.
 
     if (s_Logs++ < 10)
         Logger::Info("[PortalGun] Camera turned with the portal: yaw {:.2f} > {:.2f}.", s_Old, s_Yaw);

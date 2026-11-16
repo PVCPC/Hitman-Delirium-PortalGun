@@ -13,7 +13,7 @@
 #include <Glacier/EntityFactory.h>
 #include <Globals.h>
 #include <Functions.h>
-#include <MinHook.h>
+#include <intrin.h>
 
 #include "PortalLog.h"
 #include <delirium_portal.h>
@@ -321,6 +321,57 @@ namespace {
     // An EngineFunction's address (its only member).
     void* AddressOf(const void* p_Function) { return p_Function ? *static_cast<void* const*>(p_Function) : nullptr; }
 
+    // A hook by a 14-byte absolute jump. MinHook needs free memory within 2 GB of the exe for its relay; in Billy's
+    // run there was none (all three hooks failed, 9), so the game's ragdoll ran on NPCs Delirium drives. The first
+    // `p_Len` bytes (whole instructions, none rip-relative: checked against `p_Bytes`) go to the trampoline.
+    void* AbsHook(void* p_At, const uint8_t* p_Bytes, size_t p_Len, void* p_Detour) {
+        auto* a = static_cast<uint8_t*>(p_At);
+
+        if (!a || (reinterpret_cast<uintptr_t>(a) & 15) || p_Len < 14 || p_Len > 32 || std::memcmp(a, p_Bytes, p_Len) != 0)
+            return nullptr;
+
+        const auto s_Jmp = [](uint8_t* p, const void* p_To) {
+            p[0] = 0xFF, p[1] = 0x25;
+            std::memset(p + 2, 0, 4);
+            std::memcpy(p + 6, &p_To, 8);
+        };
+        auto* t = static_cast<uint8_t*>(VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        DWORD s_Prot;
+
+        if (!t || !VirtualProtect(a, 16, PAGE_EXECUTE_READWRITE, &s_Prot))
+            return nullptr;
+
+        std::memcpy(t, a, p_Len);
+        s_Jmp(t + p_Len, a + p_Len);
+        FlushInstructionCache(GetCurrentProcess(), t, 64);
+
+        // One 16-byte write: no thread sees half a jump.
+        alignas(16) long long s_Old[2], s_New[2];
+        std::memcpy(s_Old, a, 16);
+        std::memcpy(s_New, a, 16);
+        s_Jmp(reinterpret_cast<uint8_t*>(s_New), p_Detour);
+        const bool s_Ok = _InterlockedCompareExchange128(reinterpret_cast<volatile long long*>(a), s_New[1], s_New[0], s_Old);
+        VirtualProtect(a, 16, s_Prot, &s_Prot);
+        FlushInstructionCache(GetCurrentProcess(), a, 16);
+        return s_Ok ? t : nullptr;
+    }
+
+    // Back as it was: its first 14 bytes are the trampoline's (the next two were never changed).
+    void AbsUnhook(void* p_At, const void* p_Tramp) {
+        DWORD s_Prot;
+
+        if (!p_At || !p_Tramp || !VirtualProtect(p_At, 16, PAGE_EXECUTE_READWRITE, &s_Prot))
+            return;
+
+        alignas(16) long long s_Now[2], s_Was[2];
+        std::memcpy(s_Now, p_At, 16);
+        std::memcpy(s_Was, s_Now, 16);
+        std::memcpy(s_Was, p_Tramp, 14);
+        _InterlockedCompareExchange128(reinterpret_cast<volatile long long*>(p_At), s_Was[1], s_Was[0], s_Now);
+        VirtualProtect(p_At, 16, s_Prot, &s_Prot);
+        FlushInstructionCache(GetCurrentProcess(), p_At, 16);
+    }
+
     std::string LastError() {
         char s_Buf[512] = {};
         nm_last_error(s_Buf, sizeof(s_Buf));
@@ -350,18 +401,15 @@ void Delirium::Configure(const std::filesystem::path& p_Dir, const std::string& 
 
     // ponytail: dead NPCs with a body then have no game ragdoll at all (dragging and dumping them may look off).
     if (!g_RagdollAt) {
-        MH_Initialize();
         g_RagdollAt = AddressOf(Functions::ZHM5BaseCharacter_ActivateRagdoll);
         g_PoweredAt = AddressOf(Functions::ZHM5BaseCharacter_ActivatePoweredRagdoll);
 
-        const int s_R = g_RagdollAt ? MH_CreateHook(g_RagdollAt, reinterpret_cast<void*>(&HkRagdoll), reinterpret_cast<void**>(&g_Ragdoll)) : -99;
-        const int s_P = g_PoweredAt ? MH_CreateHook(g_PoweredAt, reinterpret_cast<void*>(&HkPowered), reinterpret_cast<void**>(&g_Powered)) : -99;
-
-        if (s_R == MH_OK)
-            MH_EnableHook(g_RagdollAt);
-
-        if (s_P == MH_OK)
-            MH_EnableHook(g_PoweredAt);
+        // Their first whole instructions (HITMAN3+fdbf0 / +fe640): mov [rsp+8],rcx; push rbx; push rbp; sub rsp,e8 and
+        // push rbp; sub rsp,50; mov [rsp+60],rbx; mov rbp,rcx.
+        static constexpr uint8_t c_Act[] = {0x48, 0x89, 0x4c, 0x24, 0x08, 0x53, 0x55, 0x48, 0x81, 0xec, 0xe8, 0x00, 0x00, 0x00};
+        static constexpr uint8_t c_Pow[] = {0x40, 0x55, 0x48, 0x83, 0xec, 0x50, 0x48, 0x89, 0x5c, 0x24, 0x60, 0x48, 0x8b, 0xe9};
+        g_Ragdoll = reinterpret_cast<decltype(g_Ragdoll)>(AbsHook(g_RagdollAt, c_Act, sizeof(c_Act), reinterpret_cast<void*>(&HkRagdoll)));
+        g_Powered = reinterpret_cast<decltype(g_Powered)>(AbsHook(g_PoweredAt, c_Pow, sizeof(c_Pow), reinterpret_cast<void*>(&HkPowered)));
 
         // Not the SDK's ZHM5BaseCharacter_DeactivateRagdoll: its pattern is ActivateRagdoll's (same bytes, same
         // address), so every "deactivate" so far switched the game's ragdoll ON (the get-up's end knocking NPCs back
@@ -373,18 +421,14 @@ void Delirium::Configure(const std::filesystem::path& p_Dir, const std::string& 
                 0x00, 0x00, 0x75, 0x16};
             auto* s_At = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr)) + 0xfd120;
             g_DeactivateAt = std::memcmp(s_At, c_Deact, sizeof(c_Deact)) == 0 ? s_At : nullptr;
+            // 20 bytes: push rbx; sub rsp,20; mov rax,[rcx+68]; mov rbx,rcx; mov rcx,[rax+a8].
+            g_Deactivate = reinterpret_cast<decltype(g_Deactivate)>(
+                AbsHook(g_DeactivateAt, c_Deact, 20, reinterpret_cast<void*>(&HkDeactivate)));
         }
-        const int s_D = g_DeactivateAt
-            ? MH_CreateHook(g_DeactivateAt, reinterpret_cast<void*>(&HkDeactivate), reinterpret_cast<void**>(&g_Deactivate)) : -99;
 
-        if (s_D == MH_OK)
-            MH_EnableHook(g_DeactivateAt);
-
-        Logger::Info("[Delirium] Game ragdoll-off hook: {} ({} at {}).", g_Deactivate ? "on" : "NO", s_D, g_DeactivateAt);
-
-        // MinHook's status (-99: the SDK found no address; 9: the function is already hooked by us, ...), for the log.
-        Logger::Info("[Delirium] Game ragdoll hooks: {} ({} at {}), {} ({} at {}).", g_Ragdoll ? "ragdoll" : "NO ragdoll", s_R,
-            g_RagdollAt, g_Powered ? "powered" : "NO powered", s_P, g_PoweredAt);
+        Logger::Info("[Delirium] Game ragdoll hooks: {} (at {}), {} (at {}), {} (at {}).", g_Ragdoll ? "ragdoll" : "NO ragdoll",
+            g_RagdollAt, g_Powered ? "powered" : "NO powered", g_PoweredAt, g_Deactivate ? "ragdoll-off" : "NO ragdoll-off",
+            g_DeactivateAt);
     }
 }
 
@@ -1798,9 +1842,9 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
 }
 
 void Delirium::Unhook() {
-    for (void* p : {g_RagdollAt, g_PoweredAt})
-        if (p)
-            MH_DisableHook(p);
+    AbsUnhook(g_RagdollAt, reinterpret_cast<const void*>(g_Ragdoll));
+    AbsUnhook(g_PoweredAt, reinterpret_cast<const void*>(g_Powered));
+    AbsUnhook(g_DeactivateAt, reinterpret_cast<const void*>(g_Deactivate));
 }
 
 void Delirium::Detach(Body& p_Body) {
@@ -2003,7 +2047,8 @@ void Delirium::UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet) {
     std::ranges::sort(s_Near, {}, &std::pair<float, TEntityRef<ZActor>>::first);
 
     std::erase_if(m_Bodies, [&](Body& b) {
-        const bool s_Keep = !b.m_Npc || std::ranges::any_of(s_Near, [&](const auto& n) {
+        // A body that's down stays on (shot from afar).
+        const bool s_Keep = !b.m_Npc || b.m_Ragdoll || std::ranges::any_of(s_Near, [&](const auto& n) {
             return n.second.m_pInterfaceRef == b.m_Char;
         });
 
@@ -2203,12 +2248,25 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         s_Hits.swap(m_Hits);
     }
 
-    for (void* c : s_Hits)
+    for (void* c : s_Hits) {
+        // Billy: shot from afar (past the 15 m / 6 NPCs that get bodies), it reacted as Hitman's. Its body now.
+        if (Globals::ActorManager && std::ranges::none_of(m_Bodies, [&](const Body& b) { return b.m_Char == c; }) &&
+            std::ranges::count_if(m_Bodies, [](const Body& b) { return b.m_Npc; }) < c_MaxNpcs + 4)
+            for (const auto& e : Globals::ActorManager->m_activatedActors)
+                if (ZActor* a = e.m_pInterfaceRef; a && static_cast<void*>(a) == c && e.m_entityRef) {
+                    const ZGlobalOutfitKit* s_Outfit = a->m_rOutfit.m_pInterfaceRef;
+                    Attach(a, e.m_entityRef.QueryInterface<ZSpatialEntity>(), true, s_Outfit && s_Outfit->m_bIsFemale, p_Ray,
+                        std::string(a->m_sActorName.c_str(), a->m_sActorName.size()));
+                    Logger::Info("[Delirium] {}: shot without a body, given one.", a->m_sActorName.c_str());
+                    break;
+                }
+
         for (Body& b : m_Bodies)
             if (b.m_Char == c && b.m_Npc) {
                 SetRagdoll(b, true);
                 ShootAtAim(b);
             }
+    }
 
     // Numpad 1: Delirium on NPCs. Numpad 2: 47 ragdolls. Numpad 5 / 6: shoot / push the body you aim at.
     static bool s_K1, s_K2, s_K5, s_K6;
