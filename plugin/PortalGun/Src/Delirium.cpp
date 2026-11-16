@@ -691,11 +691,9 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
                 SVector3 s_Hit, s_Normal;
                 float s_Z = s_Last->second;
 
-                // The middle (under the pelvis) can't be over the pelvis: anything there is the body itself.
-                const bool s_Mid = x == c_N / 2 && y == c_N / 2;
-                const SVector3 s_From = s_Mid ? SVector3(s_Top.x, s_Top.y, s_Pos[2]) : s_Top;
-
-                if (p_Ray(s_From, s_From - SVector3(0.f, 0.f, s_Mid ? 3.f : 4.f), s_Hit, s_Normal)) {
+                // (A middle ray from the pelvis hit the inside of its game ragdoll: a spike of floor at the pelvis
+                // under 8 of Billy's 20 run-5 shots. Ground rays are the level's static geometry now.)
+                if (p_Ray(s_Top, s_Top - SVector3(0.f, 0.f, 4.f), s_Hit, s_Normal)) {
                     s_Z = s_Hit.z;
 
                     if (x == c_N / 2 && y == c_N / 2)
