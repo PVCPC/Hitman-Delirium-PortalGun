@@ -33,9 +33,6 @@
 
 #include "gta4nm.h"
 
-// Pelican cb8dbe179 (not in the header yet): a pending push re-based when a body is moved (off by default, GTA IV's).
-extern "C" __declspec(dllimport) void nm_set_carry_pushes(int32_t on);
-
 #include <chrono>
 
 // Logs any of our steps that takes long enough to hitch a frame (what the hitches are).
