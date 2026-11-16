@@ -2488,7 +2488,10 @@ void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
         // renders a texture something on screen shows; at z -999 it was black), hidden by the wall, out of 47's way.
         if (s_View.m_Tablet) {
             SMatrix s_M = s_In.m_Transform;
-            s_M.Trans = s_M.Trans - s_M.YAxis * 0.25f;
+            // Billy 11-16: still no see-through. 0.25 m in, Glacier's occlusion culling hid the tablet behind the wall,
+            // so the camera never rendered (it did from inside 47's chest). 2 cm in: the wall's depth hides it, the
+            // culling (coarser) doesn't.
+            s_M.Trans = s_M.Trans - s_M.YAxis * 0.02f;
             s_View.m_Tablet->SetObjectToWorldMatrixFromEditor(s_M);
         }
 
