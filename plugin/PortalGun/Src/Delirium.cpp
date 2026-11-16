@@ -752,6 +752,26 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
             }
         }
 
+        // Billy run 8: by park benches the grid of heights made a bench top a ramp under the NPC (Herbert West: 0.82 m
+        // over his feet) or a hole (Tiffaney Prout: 0.7 m under the street). The floor is the patch's median height;
+        // a point more than 0.4 m over or under it is a bench, a table or a hole, not floor: on the floor (the walls
+        // round it stop bodies at furniture).
+        {
+            std::vector<float> s_Zs;
+
+            for (size_t i = 2; i < s_Verts.size(); i += 3)
+                s_Zs.push_back(s_Verts[i]);
+
+            std::nth_element(s_Zs.begin(), s_Zs.begin() + s_Zs.size() / 2, s_Zs.end());
+            const float s_Floor = s_Zs[s_Zs.size() / 2];
+
+            for (size_t i = 2; i < s_Verts.size(); i += 3)
+                if (std::abs(s_Verts[i] - s_Floor) > 0.4f)
+                    s_Verts[i] = s_Floor;
+
+            s_Last->second = s_Verts[(c_N / 2 * c_N + c_N / 2) * 3 + 2];
+        }
+
         // A cell over an open portal in the floor is a hole: bodies fall in.
         const auto s_OverPortal = [&](uint32_t a, uint32_t d) {
             if (!m_PortalsOpen)
@@ -808,6 +828,12 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
                 SVector3 s_Hit, s_N;
 
                 if (!p_Ray(s_From, s_From + s_Dir * 2.5f, s_Hit, s_N))
+                    continue;
+
+                // Billy run 8: these rays hit the NPC itself (Herbert_West-1794868913269: 14 wall boxes in a ring
+                // 0.2-0.4 m round his own pelvis): caged in walls, he spun, contorted and was flung. Under 0.5 m from
+                // his middle is his own body; a wall that close was seen (and kept, s_Walls) as he came to it.
+                if ((SVector3(s_Hit.x, s_Hit.y, 0.f) - SVector3(s_From.x, s_From.y, 0.f)).Length() < 0.5f)
                     continue;
 
                 SVector3 n(s_N.x, s_N.y, 0.f);
