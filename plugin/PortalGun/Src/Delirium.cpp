@@ -2054,8 +2054,9 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
             for (int i = 0, n = ReadRagdoll(b->m_Char, &s_Set, s_Bodies, s_Bones); i < n; ++i)
                 SetKinematic(s_Bodies[i], false);
 
-            // Hitman's own get-up from where its ragdoll lies (on NM's body); no clip: just off.
-            if (StartRecovery(b->m_Char)) {
+            // Hitman's own get-up from where its ragdoll lies (on NM's body); no clip: just off. One that kept his
+            // feet just goes back to his animation (Billy: Hitman's get-up from standing knocked two NPCs over).
+            if (b->m_SettledT <= 1.5f && StartRecovery(b->m_Char)) {
                 b->m_Recover = 10.f; // 6 s timed out mid get-up
                 Logger::Info("[Delirium] {}: Hitman's get-up.", b->m_Name);
             }
@@ -2072,10 +2073,11 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
             SMatrix s_M = b->m_HeldRot;
             float s_Head[3] = {};
             int s_FaceUp = 0;
-            nm_agent_get_lying(b->m_Agent, s_Head, &s_FaceUp);
+            // Lying only: standing, its "head way" is any way (Billy: the body flipped sideways as it stood back up).
+            const bool s_Lying = nm_agent_get_lying(b->m_Agent, s_Head, &s_FaceUp) > 0.f;
             SVector3 s_Face(s_Head[0], s_Head[1], 0.f);
 
-            if (s_Face.Length() > 0.5f) {
+            if (s_Lying && s_Face.Length() > 0.5f) {
                 s_Face = (s_FaceUp ? s_Face * -1.f : s_Face).Normalized();
                 s_M.YAxis = float4(s_Face.x, s_Face.y, 0.f, 0.f);
                 s_M.XAxis = float4(s_Face.y, -s_Face.x, 0.f, 0.f); // forward x up

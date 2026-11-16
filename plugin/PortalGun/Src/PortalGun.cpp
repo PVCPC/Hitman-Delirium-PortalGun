@@ -1055,7 +1055,6 @@ void PortalGun::PlacePortalInFrontOfPlayer(Portal& p_Portal, const SMatrix& p_Pl
 // Delirium's ground rays: the level only, never a character's collider (an NPC's own capsule laid its ground at
 // body height and the contacts threw it off; Pelican).
 static thread_local bool g_LevelOnly = false;
-static thread_local bool g_StaticOnly = false;
 
 static bool IsCharacter(const ZEntityRef& p_Hit, const SVector3& p_At) {
     if (p_Hit.QueryInterface<ZActor>() || p_Hit.QueryInterface<ZHM5BaseCharacter>())
@@ -1081,16 +1080,11 @@ static bool IsCharacter(const ZEntityRef& p_Hit, const SVector3& p_At) {
 
 bool PortalGun::RayCastLevel(const SVector3& p_From, const SVector3& p_To, const ZEntityRef& p_Ignore, SVector3& p_Hit,
     SVector3& p_Normal) {
-    // Billy: shot NPCs floated / sank / fell through: the ground rays hit their own game ragdoll (dynamic). The level's
-    // static geometry first (no characters, no ragdolls); anything at all only where it has none.
+    // Everything the level has (static only missed the porches and platforms NPCs stand on: Billy's run 6, two NPCs
+    // 0.6-0.8 m over the ground found, "teleported up" when shot); characters and the top of any ragdoll body skipped
+    // (IsCharacter, BodyAt).
     g_LevelOnly = true;
-    g_StaticOnly = true;
-    bool s_Ok = RayCast(p_From, p_To, p_Ignore, p_Hit, p_Normal);
-    g_StaticOnly = false;
-
-    if (!s_Ok)
-        s_Ok = RayCast(p_From, p_To, p_Ignore, p_Hit, p_Normal);
-
+    const bool s_Ok = RayCast(p_From, p_To, p_Ignore, p_Hit, p_Normal);
     g_LevelOnly = false;
     return s_Ok;
 }
@@ -1113,7 +1107,6 @@ bool PortalGun::RayCast(
         ZRayQueryInput s_Input {
             .m_vFrom = float4(s_From, 1.f),
             .m_vTo = float4(p_To, 1.f),
-            .m_eType = g_StaticOnly ? ECollidablesType::ECST_STATIC_ONLY : ECollidablesType::ECST_STATIC_AND_DYNAMIC,
         };
 
         ZRayQueryOutput s_Output {};
