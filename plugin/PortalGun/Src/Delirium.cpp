@@ -1720,25 +1720,8 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
 
     // Homer (or Wilma) fitted to this character's own proportions (Pelican): the keyframe then puts every part
     // exactly on its bone, no length fight (shaking) or baked-in pelvis height (floating). REAL: one world, scale 1.
-    // Billy: the upper chest sat low (neck too long, shoulders low) and stuck out behind the neck. Hitman's spine bones
-    // run near the back and Homer's trunk capsules are centred on the joints: the trunk joints (7-10) forward 4 cm,
-    // the upper chest's lower joint (10) up 8 cm (part 10's centre was 5.91 between 5.85 and 6.08, its top 5 cm under
-    // the mesh's shoulders).
-    {
-        const SMatrix s_E = p_Spatial->GetObjectToWorldMatrix();
-        const SVector3 s_Fwd = SVector3(-s_E.YAxis.x, -s_E.YAxis.y, 0.f).Normalized();
-
-        // Billy (side view): still a rack at 2 cm. The bulge is the mid chest (parts 8-9): only the upper chest's joint
-        // (10, the hump behind the neck) goes forward now.
-        for (int k = 10; k <= 10; ++k) {
-            // Billy: 5 cm gave him a rack (the chest out past the suit's front): 2.
-            s_Joints[k * 3] += s_Fwd.x * 0.02f;
-            s_Joints[k * 3 + 1] += s_Fwd.y * 0.02f;
-        }
-
-        s_Joints[10 * 3 + 2] += 0.10f; // Pelican: toward the j10-j11 midpoint, part 10's top meeting j11
-    }
-
+    // No joint changes: the fit scales each part by its bone's length, so raising joint 10 by 10 cm stretched the mid
+    // chest (part 9: radius 0.132 > 0.218 m, Billy's "rack", on every NPC too). Each body fitted to its own skeleton.
     NmBuild* s_Base = p_Female && m_Wilma ? m_Wilma : m_Build;
     s_Lap("check");
     // A short spine (Hitman: 3 bones for Homer's 4 parts) is spread by Fred's own joint shares in nm_rig_joints
@@ -1911,6 +1894,8 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         s_N);
     Own(b.m_Char, true, b.m_Npc);
     m_Bodies.push_back(std::move(b));
+    // Its ground now: shot on its first frame it had none (the replays: "no ground within 4 m" in 10 of 17 shots).
+    UpdateGround(p_Ray, false);
     return true;
 }
 
@@ -2131,10 +2116,11 @@ void Delirium::UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet) {
         return !s_Keep;
     });
 
-    int s_Count = static_cast<int>(std::ranges::count_if(m_Bodies, [](const Body& b) { return b.m_Npc; }));
+    // Billy: after enough kills, bumped NPCs stopped ragdolling. The dead (kept on) counted against the 6: only those up count.
+    int s_Count = static_cast<int>(std::ranges::count_if(m_Bodies, [](const Body& b) { return b.m_Npc && !b.m_Dead; }));
 
     for (const auto& [s_D, s_Actor] : s_Near) {
-        if (s_Count >= c_MaxNpcs || s_D > 15.f)
+        if (s_Count >= c_MaxNpcs || s_D > 15.f || m_Bodies.size() >= c_MaxMeshes - 1)
             break;
 
         ZActor* a = s_Actor.m_pInterfaceRef;
@@ -2356,7 +2342,8 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     for (void* c : s_Hits) {
         // Billy: shot from afar (past the 15 m / 6 NPCs that get bodies), it reacted as Hitman's. Its body now.
         if (Globals::ActorManager && std::ranges::none_of(m_Bodies, [&](const Body& b) { return b.m_Char == c; }) &&
-            std::ranges::count_if(m_Bodies, [](const Body& b) { return b.m_Npc; }) < c_MaxNpcs + 4)
+            std::ranges::count_if(m_Bodies, [](const Body& b) { return b.m_Npc && !b.m_Dead; }) < c_MaxNpcs + 4 &&
+            m_Bodies.size() < c_MaxMeshes - 1)
             for (const auto& e : Globals::ActorManager->m_activatedActors)
                 if (ZActor* a = e.m_pInterfaceRef; a && static_cast<void*>(a) == c && e.m_entityRef) {
                     const ZGlobalOutfitKit* s_Outfit = a->m_rOutfit.m_pInterfaceRef;
@@ -3224,7 +3211,14 @@ void Delirium::ShootAtAim(Body& b) {
     // 47's gun as GTA IV's (weaponinfo.xml, loaded at start; the SDK's four defaults without it): its push, damage and
     // reaction set. ponytail: knives and throws count as the last gun fired.
     const int t = m_Weapon;
-    const char* s_Gun = t == 0 ? "pistol" : t == 3 ? "mp5" : t == 4 ? "sniperrifle" : t == 7 ? "shotgun" : "ak47";
+    // Billy's pistol came through as an AK (anything not 0/3/4/7 was "ak47"): only an assault rifle is one now.
+    const char* s_Gun = t == 2 ? "ak47" : t == 3 ? "mp5" : t == 4 ? "sniperrifle" : t == 7 ? "shotgun" : "pistol";
+    {
+        static int s_Last = -1;
+
+        if (std::exchange(s_Last, t) != t)
+            Logger::Info("[Delirium] 47's gun: Hitman weapon type {}, Delirium {}.", t, s_Gun);
+    }
     int s_W = nm_weapon_find(s_Gun);
 
     if (s_W < 0) // no game table: the defaults
