@@ -3125,14 +3125,24 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
         // Knocked out: dazed a moment (the push, his balance staggering), then out: limp, he falls over and stays
         // down (Billy: "they just lose balance and fall over"; Hitman has him unconscious). No get-up.
+        // Billy: one only dazed gets up when it wears off, and a knocked-out one can be woken by whoever finds him:
+        // limp while Hitman has him pacified; not pacified (2 s on), alive again and his get-up below.
         if (b.m_Ko) {
-            if ((b.m_KoT += p_Dt) > 0.6f && !b.m_Dead) {
+            b.m_KoT += p_Dt;
+            const bool s_Out = b.m_Npc && static_cast<ZActor*>(b.m_Char)->IsPacified();
+
+            if (!b.m_KoOut && b.m_KoT > 0.6f) {
                 nm_agent_set_dead(b.m_Agent, 1);
-                b.m_Dead = true;
+                b.m_KoOut = true;
                 Logger::Info("[Delirium] {}: out cold, falls.", b.m_Name);
             }
 
-            continue;
+            if (!b.m_KoOut || s_Out || b.m_KoT < 2.f)
+                continue;
+
+            nm_agent_set_dead(b.m_Agent, 0);
+            b.m_Ko = b.m_KoOut = false;
+            Logger::Info("[Delirium] {}: comes to; gets up.", b.m_Name);
         }
 
         if (s_Settled || nm_agent_should_get_up(b.m_Agent, 1.f) == 1) {
