@@ -103,6 +103,8 @@ private:
         float m_GetUpTime = 0.f;
         bool m_HighFall = false;
         float m_SettledT = 0.f; // s standing still on its feet while a ragdoll
+        bool m_Ko = false;
+        int m_FollowLogs = 0;   // per-frame follow lines logged (first 12 after each ragdoll start)      // knocked out by a thrown object: loses balance, falls, stays down
         std::vector<float> m_PoseA, m_PoseB; // the last two stepped poses (nm_rig_pose)
         int m_PoseHips = -1;
         SMatrix m_HeldRot; // its entity as it went down (held there, xy following the body)
@@ -204,6 +206,7 @@ private:
     std::mutex m_HitMutex;
     std::vector<void*> m_Hits;
     std::unordered_map<void*, float> m_Hp;
+    std::unordered_map<void*, bool> m_Pacified; // IsPacified last frame (a thrown object's knock-out)
     std::unordered_map<void*, float> m_Pending; // shot, no body yet (Attach failed): seconds left to retry
     float m_BumpWatch = 0.f; // seconds left logging a bump frame by frame
     NmAgent* m_BumpAgent = nullptr;

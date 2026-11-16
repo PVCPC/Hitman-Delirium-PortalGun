@@ -1593,6 +1593,20 @@ void Delirium::Follow(Body& b) {
         if ((SVector3(s_Now.Trans.x, s_Now.Trans.y, s_Now.Trans.z) - SVector3(s_To.Trans.x, s_To.Trans.y, s_To.Trans.z)).Length() > 0.3f)
             ++s_Put;
 
+        // Billy: "teleports a couple feet up when shot", Homer's pelvis right in the logs. Where the game's pelvis
+        // body was left (before this move), where it goes, the entity and the engine's root: which one jumps.
+        if (i == 0 && b.m_FollowLogs < 12) {
+            ++b.m_FollowLogs;
+            float x[3], y[3], z[3], t[3];
+            int s_L = 0;
+            const bool s_Root = Bones::World(b.m_Anim, x, y, z, t, s_L);
+            const float4 e = b.m_Spatial->GetObjectToWorldMatrix().Trans;
+            Logger::Info("[Delirium] {} follow {}: pelvis body was z {:.2f} ({:.2f} m off), put at z {:.2f}; entity z {:.2f}, "
+                "engine root z {:.2f}.", b.m_Name, b.m_FollowLogs, s_Now.Trans.z,
+                (SVector3(s_Now.Trans.x, s_Now.Trans.y, s_Now.Trans.z) - SVector3(s_To.Trans.x, s_To.Trans.y, s_To.Trans.z)).Length(),
+                s_To.Trans.z, e.z, s_Root ? t[2] : -999.f);
+        }
+
         g_OurMove = true;
         s_Obj->SetTransform(s_To);
         s_Obj->MoveTransform(s_To); // its kinematic target too: the physics step doesn't take it back elsewhere
@@ -2180,6 +2194,7 @@ void Delirium::SetRagdoll(Body& p_Body, bool p_On) {
             Functions::ZHM5BaseCharacter_ActivateRagdoll->Call(b->m_Char, true);
             b->m_Follow = true;
             b->m_FollowSet = nullptr;
+            b->m_FollowLogs = 0;
         }
     }
     else {
@@ -2508,6 +2523,27 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     // Billy's run: no YouGotHit for 47's bullets at all, so shots never reached Delirium. A drop in an NPC's hit
     // points (ZActor +0x1028) is a hit.
+    // Billy: an object thrown at someone should knock him off balance and over, not hard. Hitman knocks him out
+    // (pacified, not dead) with 47 out of reach (not a choke or a punch): a gentle push from 47's side, then down.
+    std::vector<void*> s_Throws;
+
+    if (Globals::ActorManager)
+        for (const auto& e : Globals::ActorManager->m_activatedActors)
+            if (ZActor* a = e.m_pInterfaceRef) {
+                const bool s_Pac = a->IsPacified() && !a->IsDead();
+                bool& s_Was = m_Pacified[a];
+
+                if (s_Pac && !s_Was && e.m_entityRef)
+                    if (ZSpatialEntity* s = e.m_entityRef.QueryInterface<ZSpatialEntity>()) {
+                        const float4 t = s->GetObjectToWorldMatrix().Trans;
+
+                        if ((SVector3(t.x, t.y, m_Eye.z) - m_Eye).Length() > 2.5f)
+                            s_Throws.push_back(a);
+                    }
+
+                s_Was = s_Pac;
+            }
+
     if (Globals::ActorManager)
         for (const auto& e : Globals::ActorManager->m_activatedActors)
             if (ZActor* a = e.m_pInterfaceRef) {
@@ -2534,6 +2570,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         else
             s_Hits.push_back(it++->first);
 
+    s_Hits.insert(s_Hits.end(), s_Throws.begin(), s_Throws.end());
     std::ranges::sort(s_Hits);
     s_Hits.erase(std::unique(s_Hits.begin(), s_Hits.end()), s_Hits.end());
 
@@ -2590,6 +2627,19 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 ZActor* a = static_cast<ZActor*>(b.m_Char);
                 const bool s_Kill = a->m_fCurrentHitPoints <= 0.f || a->IsDead();
                 SetRagdoll(b, true);
+
+                if (std::ranges::find(s_Throws, c) != s_Throws.end()) {
+                    // Thrown at: a push at the chest from 47's side (about a shove's), NM's balance tries and loses.
+                    float p[3], q[4];
+                    nm_agent_get_part_transform(b.m_Agent, 9, p, q);
+                    SVector3 d(p[0] - m_Eye.x, p[1] - m_Eye.y, 0.f);
+                    d = d.Length() > 0.01f ? d.Normalized() : SVector3(1.f, 0.f, 0.f);
+                    const float s_Imp[3] = {d.x * 45.f, d.y * 45.f, 0.f};
+                    nm_agent_apply_push(b.m_Agent, p, s_Imp);
+                    b.m_Ko = true;
+                    Logger::Info("[Delirium] {}: knocked out by a thrown object; off balance.", b.m_Name);
+                    continue;
+                }
 
                 if (s_Kill)
                     b.m_Health = std::min(b.m_Health, 1.f);
@@ -3036,6 +3086,20 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         // back on his animation too.
         b.m_SettledT = !b.m_HighFall && nm_agent_is_settled(b.m_Agent) == 1 ? b.m_SettledT + p_Dt : 0.f;
         const bool s_Settled = b.m_SettledT > 1.5f;
+
+        // Knocked out: no get-up; once down, limp (Hitman has him unconscious).
+        if (b.m_Ko) {
+            float s_H[3];
+            int32_t s_Up = 0;
+
+            if (nm_agent_get_lying(b.m_Agent, s_H, &s_Up) > 0.5f && !b.m_Dead) {
+                nm_agent_set_dead(b.m_Agent, 1);
+                b.m_Dead = true;
+                Logger::Info("[Delirium] {}: down, out cold.", b.m_Name);
+            }
+
+            continue;
+        }
 
         if (s_Settled || nm_agent_should_get_up(b.m_Agent, 1.f) == 1) {
             Logger::Info("[Delirium] {} {}.", b.m_Name, s_Settled ? "kept his feet; back on his animation" : "gets up");
