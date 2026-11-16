@@ -2531,7 +2531,9 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 const auto h = m_Hp.find(b.m_Char);
                 const bool s_NoDamage = h != m_Hp.end() && static_cast<ZActor*>(b.m_Char)->m_fCurrentHitPoints >= h->second - 0.01f;
 
-                if (s_NoDamage)
+                // Billy: a fire extinguisher to the head still read as a shot (it costs hit points). No shot from 47's
+                // gun in the last 0.5 s: thrown.
+                if (s_NoDamage || Thrown())
                     Knock(b);
                 else if (b.m_Hit == 0)
                     ShootAtAim(b);
@@ -2576,6 +2578,19 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             if (ZActor* a = e.m_pInterfaceRef) {
                 const bool s_Pac = a->IsPacified() && !a->IsDead();
                 bool& s_Was = m_Pacified[a];
+
+                // Billy: Numpad 1 or not, anyone on the map hit by something thrown gets Delirium. The game ragdolls him
+                // (bodiless) with no gunshot from 47: a body and the knock.
+                {
+                    const bool s_Rag = GameRagdollOn(a);
+                    bool& s_RagWas = m_GameRag[a];
+
+                    if (s_Rag && !s_RagWas && !a->IsDead() && Thrown() &&
+                        std::ranges::none_of(m_Bodies, [&](const Body& b) { return b.m_Char == static_cast<void*>(a); }))
+                        s_Throws.push_back(a);
+
+                    s_RagWas = s_Rag;
+                }
 
                 if (s_Pac && !s_Was && e.m_entityRef)
                     if (ZSpatialEntity* s = e.m_entityRef.QueryInterface<ZSpatialEntity>()) {
@@ -3137,7 +3152,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 Logger::Info("[Delirium] {}: out cold, falls.", b.m_Name);
             }
 
-            if (!b.m_KoOut || s_Out || b.m_KoT < 2.f)
+            if (!b.m_KoOut || s_Out || b.m_KoT < 6.f) // a daze lasts a few seconds
                 continue;
 
             nm_agent_set_dead(b.m_Agent, 0);
@@ -3545,7 +3560,8 @@ void Delirium::Knock(Body& b) {
     nm_agent_apply_push(b.m_Agent, p, s_Imp);
     b.m_Ko = true;
     b.m_KoT = 0.f;
-    Logger::Info("[Delirium] {}: knocked out by a thrown object; off balance.", b.m_Name);
+    Logger::Info("[Delirium] {}: knocked by a thrown object; off balance (Hitman: pacified {}, health {:.0f}).", b.m_Name,
+        b.m_Npc && static_cast<ZActor*>(b.m_Char)->IsPacified(), b.m_Npc ? static_cast<ZActor*>(b.m_Char)->m_fCurrentHitPoints : 0.f);
 }
 
 void Delirium::ShootAtAim(Body& b) {

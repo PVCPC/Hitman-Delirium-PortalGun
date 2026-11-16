@@ -203,14 +203,17 @@ private:
     void Follow(Body& b);
 public:
     // 47 fired a gun (eWeaponType) / something hit a character: from the game's hooks, any thread.
-    void Fired(int p_Type) { m_Weapon = p_Type; }
+    void Fired(int p_Type) { m_Weapon = p_Type; m_LastFire = m_Clock; }
+    float m_LastFire = -10.f; // m_Clock when 47 last fired a real gun
+    std::unordered_map<void*, bool> m_GameRag; // the game's ragdoll on last frame, per actor (bodiless ones too)
     void Hit(void* p_Char) { std::scoped_lock s_Lock(m_HitMutex); m_Hits.push_back(p_Char); }
 private:
     std::atomic<int> m_Weapon {0};
     std::mutex m_HitMutex;
     std::vector<void*> m_Hits;
     std::unordered_map<void*, float> m_Hp;
-    std::unordered_map<void*, bool> m_Pacified; // IsPacified last frame (a thrown object's knock-out)
+    std::unordered_map<void*, bool> m_Pacified;
+    bool Thrown() const { return m_Clock - m_LastFire > 0.5f; } // a game ragdoll now isn't 47's bullet // IsPacified last frame (a thrown object's knock-out)
     std::unordered_map<void*, float> m_Pending; // shot, no body yet (Attach failed): seconds left to retry
     float m_BumpWatch = 0.f; // seconds left logging a bump frame by frame
     NmAgent* m_BumpAgent = nullptr;
