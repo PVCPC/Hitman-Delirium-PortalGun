@@ -2314,6 +2314,14 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 m_Hp[a] = s_Hp;
             }
 
+    // Billy: the first hit on an NPC without a body didn't give it one (Attach failed, its bones unreadable that
+    // frame); the next hit did. A failed one tries again each frame for a second.
+    for (auto it = m_Pending.begin(); it != m_Pending.end();)
+        if ((it->second -= p_Dt) <= 0.f || std::ranges::any_of(m_Bodies, [&](const Body& b) { return b.m_Char == it->first; }))
+            it = m_Pending.erase(it);
+        else
+            s_Hits.push_back(it++->first);
+
     std::ranges::sort(s_Hits);
     s_Hits.erase(std::unique(s_Hits.begin(), s_Hits.end()), s_Hits.end());
 
@@ -2325,8 +2333,14 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                 if (ZActor* a = e.m_pInterfaceRef; a && static_cast<void*>(a) == c && e.m_entityRef) {
                     const ZGlobalOutfitKit* s_Outfit = a->m_rOutfit.m_pInterfaceRef;
                     if (Attach(a, e.m_entityRef.QueryInterface<ZSpatialEntity>(), true, s_Outfit && s_Outfit->m_bIsFemale, p_Ray,
-                        std::string(a->m_sActorName.c_str(), a->m_sActorName.size())))
-                        Logger::Info("[Delirium] {}: shot without a body, given one.", a->m_sActorName.c_str());
+                        std::string(a->m_sActorName.c_str(), a->m_sActorName.size()))) {
+                        Logger::Info("[Delirium] {}: shot without a body, given one{}.", a->m_sActorName.c_str(),
+                            m_Pending.contains(c) ? " (on a retry)" : "");
+                        m_Pending.erase(c);
+                    }
+                    else
+                        m_Pending.try_emplace(c, 1.f);
+
                     break;
                 }
 
@@ -2557,7 +2571,8 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             s_D.z = 0.f;
             const bool s_Touch = s_D.Length() < 0.7f;
 
-            if (!s_Touch || std::exchange(b.m_Touching, s_Touch) || b.m_Ragdoll || b.m_Recover > 0.f || b.m_Stagger > 0.f)
+            // (The old test set m_Touching only while touching: after the first touch, no bump ever again.)
+            if (std::exchange(b.m_Touching, s_Touch) || !s_Touch || b.m_Ragdoll || b.m_Recover > 0.f || b.m_Stagger > 0.f)
                 continue;
 
             const SMatrix s_NM = b.m_Spatial->GetObjectToWorldMatrix();
@@ -2569,7 +2584,9 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             Logger::Info("[Delirium] 47 bumped {} at {:.1f} m/s: {} (side {}, clip {}).", b.m_Name, s_Vel.Length(),
                 std::array {"nothing", "shove", "flinch", "knocked over"}[std::clamp(s_R, 0, 3)], s_Side, s_Clip);
 
-            if (s_R == NM_BUMP_NOTHING)
+            // GTA's answer is the player's; the bumped body is pushed by the touch itself. Hitman's NPC is on its
+            // animation until then, so "nothing" still staggers it at a run (the guide's 2.5 m/s rule).
+            if (s_R == NM_BUMP_NOTHING && (s_Vel.Length() < 2.5f || s_Vel.Dot(s_D) <= 0.f))
                 continue;
 
             SetRagdoll(b, true);

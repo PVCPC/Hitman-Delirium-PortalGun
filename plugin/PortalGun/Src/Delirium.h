@@ -195,6 +195,7 @@ private:
     std::mutex m_HitMutex;
     std::vector<void*> m_Hits;
     std::unordered_map<void*, float> m_Hp;
+    std::unordered_map<void*, float> m_Pending; // shot, no body yet (Attach failed): seconds left to retry
     float m_BumpWatch = 0.f; // seconds left logging a bump frame by frame
     NmAgent* m_BumpAgent = nullptr;
     NmAgent* m_ShovedLast = nullptr; // GTA shoves each one once in a row // each NPC's hit points last frame: a drop is a hit (YouGotHit never came)
