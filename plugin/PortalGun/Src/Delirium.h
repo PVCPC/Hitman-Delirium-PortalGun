@@ -101,6 +101,7 @@ private:
         bool m_GettingUp = false; // (unused since the learned get-up went)
         float m_GetUpTime = 0.f;
         bool m_HighFall = false;
+        float m_SettledT = 0.f; // s standing still on its feet while a ragdoll
         std::vector<float> m_PoseA, m_PoseB; // the last two stepped poses (nm_rig_pose)
         int m_PoseHips = -1;
         SMatrix m_HeldRot; // its entity as it went down (held there, xy following the body)

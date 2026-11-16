@@ -535,7 +535,9 @@ bool Delirium::BodyAt(const SVector3& p_At) const {
             for (int i = 0; i < n; ++i) {
                 const float4 t = static_cast<IPhysicsObject*>(s_Rb[i])->GetTransform().Trans;
 
-                if ((SVector3(t.x, t.y, t.z) - p_At).Length() < 0.35f)
+                // Only a hit on top of a body (over its centre): the floor beside or under its feet is ground
+                // (Billy's next run: the floor by the feet skipped, his ground 0.5 m under the street, fell through).
+                if ((SVector3(t.x, t.y, t.z) - p_At).Length() < 0.35f && p_At.z > t.z - 0.03f)
                     return true;
             }
         }
@@ -2206,7 +2208,9 @@ void Delirium::Snapshot() {
         if (s_Prev.size() != o.size())
             return;
 
-        const float t = m_Alpha;
+        // Billy: 47's Homer drawn behind him running (a "hump"): one step between the last two stepped poses is 1/60 s
+        // late, ~10 cm at a run. A body on its animation is drawn at the newest step.
+        const float t = std::ranges::any_of(m_Bodies, [&](const Body& b) { return b.m_Agent == a && !b.m_Ragdoll; }) ? 1.f : m_Alpha;
 
         for (int i = 0; i < c_Parts; ++i) {
             float* c = &o[i * 7];
@@ -2843,6 +2847,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     for (Body& b : m_Bodies) {
         if (!b.m_Ragdoll || b.m_Dead) {
             b.m_GettingUp = false;
+            b.m_SettledT = 0.f;
             continue;
         }
 
@@ -2858,8 +2863,13 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
         // Up again with Hitman's own recovery (Billy: never the learned get-up / getup.net). SetRagdoll(false) puts an
         // NPC where its body lies, facing the way it got up, and deactivates the game's ragdoll.
-        if (nm_agent_should_get_up(b.m_Agent, 1.f) == 1) {
-            Logger::Info("[Delirium] {} gets up.", b.m_Name);
+        // Billy: one shot that kept his feet never left the balance. Standing still on his feet (the stagger's over):
+        // back on his animation too.
+        b.m_SettledT = !b.m_HighFall && nm_agent_is_settled(b.m_Agent) == 1 ? b.m_SettledT + p_Dt : 0.f;
+        const bool s_Settled = b.m_SettledT > 1.5f;
+
+        if (s_Settled || nm_agent_should_get_up(b.m_Agent, 1.f) == 1) {
+            Logger::Info("[Delirium] {} {}.", b.m_Name, s_Settled ? "kept his feet; back on his animation" : "gets up");
             b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
         }
     }
