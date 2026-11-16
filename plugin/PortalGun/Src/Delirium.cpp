@@ -1355,6 +1355,18 @@ void Delirium::Follow(Body& b) {
                 Logger::Info("[Delirium] {}: the game's ragdoll went off while its body is down; on again.", b.m_Name);
             Functions::ZHM5BaseCharacter_ActivateRagdoll->Call(b.m_Char, true);
             GameTook(b.m_Char);
+
+            // Billy run 7 "teleporting": the game remakes its ragdoll where its bodies were last left (Jonathon
+            // Credle's 4.11 m off Homer) and it was shown there a frame before the next Follow put it on Homer. On
+            // Homer the frame it's made.
+            static bool s_Again = false;
+
+            if (!s_Again) {
+                s_Again = true;
+                Follow(b);
+                s_Again = false;
+            }
+
             return;
         }
 
