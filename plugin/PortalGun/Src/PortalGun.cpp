@@ -2639,6 +2639,9 @@ void PortalGun::DrawViews() {
     // The oval as horizontal strips; each strip is the texture's quad with its corners moved onto the strip and
     // its texture positions set to where they are on screen (the texture is the screen as seen through the portal).
     constexpr int c_Strips = 24;
+    const auto s_CamEnt = Functions::GetCurrentCamera->Call();
+    const SMatrix s_CamM = s_CamEnt ? s_CamEnt->GetObjectToWorldMatrix() : SMatrix();
+    const SMatrix* s_Cam = s_CamEnt ? &s_CamM : nullptr;
 
     for (int i = 0; i < 2; ++i) {
         const PortalView& s_View = m_Views[i];
@@ -2666,32 +2669,75 @@ void PortalGun::DrawViews() {
             return true;
         };
 
-        for (int k = 0; k < c_Strips; ++k) {
-            const float s_Z0 = c_HalfHeight * (-1.f + 2.f * k / c_Strips);
-            const float s_Z1 = c_HalfHeight * (-1.f + 2.f * (k + 1) / c_Strips);
-            const float s_W0 = HalfWidthAt(s_Z0);
-            const float s_W1 = HalfWidthAt(s_Z1);
-            ImVec2 s_P[4];
+        // Billy 11-16: the picture was painted over 47 standing in front of the portal. The oval as a grid of cells;
+        // a cell over a part of 47 that's in front of the portal's surface is left out, so he's drawn over it (parts
+        // already through, behind the surface, stay hidden by it: Portal 2's clipping).
+        struct Cut { ImVec2 a, b; float r; };
+        std::vector<Cut> s_Cuts;
 
-            if (!s_Screen(-s_W0, s_Z0, s_P[0]) || !s_Screen(s_W0, s_Z0, s_P[1]) ||
-                !s_Screen(s_W1, s_Z1, s_P[2]) || !s_Screen(-s_W1, s_Z1, s_P[3]))
-                continue;
+        if (s_Cam) {
+            for (const auto& c : m_Delirium.HitmanCapsules()) {
+                const SVector3 s_A(c[0], c[1], c[2]), s_B(c[3], c[4], c[5]);
 
-            ImGui::SetCursorScreenPos(ImVec2(0.f, 0.f));
-            SDK()->ImGuiGameRenderTarget(s_Rt, ImVec2(1.f, 1.f));
+                if (ToLocal(s_M, (s_A + s_B) * 0.5f).y < -0.02f)
+                    continue;
 
-            ImDrawList* s_List = ImGui::GetWindowDrawList();
+                SVector2 a, b, e;
 
-            if (s_List->VtxBuffer.Size < 4)
-                continue;
-
-            ImDrawVert* s_Vtx = s_List->VtxBuffer.Data + s_List->VtxBuffer.Size - 4;
-
-            for (int v = 0; v < 4; ++v) {
-                s_Vtx[v].pos = s_P[v];
-                s_Vtx[v].uv = ImVec2(s_P[v].x / m_ScreenW, s_P[v].y / m_ScreenH);
+                if (SDK()->WorldToScreen(s_A, a) && SDK()->WorldToScreen(s_B, b) &&
+                    SDK()->WorldToScreen(s_A + ToVec3(s_Cam->XAxis) * c[6], e))
+                    s_Cuts.push_back({ImVec2(a.x, a.y), ImVec2(b.x, b.y), std::hypot(e.x - a.x, e.y - a.y) + 2.f});
             }
         }
+
+        const auto s_Covered = [&](const ImVec2& p) {
+            for (const Cut& c : s_Cuts) {
+                const float dx = c.b.x - c.a.x, dy = c.b.y - c.a.y, l = dx * dx + dy * dy;
+                const float t = l > 0.f ? std::clamp(((p.x - c.a.x) * dx + (p.y - c.a.y) * dy) / l, 0.f, 1.f) : 0.f;
+
+                if (std::hypot(p.x - c.a.x - dx * t, p.y - c.a.y - dy * t) < c.r)
+                    return true;
+            }
+
+            return false;
+        };
+
+        const int s_Rows = s_Cuts.empty() ? c_Strips : 64, s_Cols = s_Cuts.empty() ? 1 : 32;
+        std::vector<ImVec2> s_P((s_Rows + 1) * (s_Cols + 1));
+        std::vector<char> s_Ok(s_P.size());
+
+        for (int k = 0; k <= s_Rows; ++k) {
+            const float s_Z = c_HalfHeight * (-1.f + 2.f * k / s_Rows);
+            const float s_W = HalfWidthAt(s_Z);
+
+            for (int j = 0; j <= s_Cols; ++j)
+                s_Ok[k * (s_Cols + 1) + j] = s_Screen(-s_W + 2.f * s_W * j / s_Cols, s_Z, s_P[k * (s_Cols + 1) + j]);
+        }
+
+        ImGui::SetCursorScreenPos(ImVec2(0.f, 0.f));
+        SDK()->ImGuiGameRenderTarget(s_Rt, ImVec2(1.f, 1.f));
+        ImDrawList* s_List = ImGui::GetWindowDrawList();
+        const ImTextureRef s_Tex = s_List->_CmdHeader.TexRef;
+
+        if (s_List->VtxBuffer.Size >= 4) // the 1 px image that set the texture: nothing
+            for (int v = 1; v <= 4; ++v)
+                s_List->VtxBuffer.Data[s_List->VtxBuffer.Size - v].pos = ImVec2(0.f, 0.f);
+
+        for (int k = 0; k < s_Rows; ++k)
+            for (int j = 0; j < s_Cols; ++j) {
+                const int i0 = k * (s_Cols + 1) + j, i1 = i0 + 1, i2 = i1 + s_Cols + 1, i3 = i0 + s_Cols + 1;
+
+                if (!s_Ok[i0] || !s_Ok[i1] || !s_Ok[i2] || !s_Ok[i3])
+                    continue;
+
+                const ImVec2 s_Mid((s_P[i0].x + s_P[i2].x) * 0.5f, (s_P[i0].y + s_P[i2].y) * 0.5f);
+
+                if (!s_Cuts.empty() && s_Covered(s_Mid))
+                    continue;
+
+                const auto uv = [&](const ImVec2& p) { return ImVec2(p.x / m_ScreenW, p.y / m_ScreenH); };
+                s_List->AddImageQuad(s_Tex, s_P[i0], s_P[i1], s_P[i2], s_P[i3], uv(s_P[i0]), uv(s_P[i1]), uv(s_P[i2]), uv(s_P[i3]));
+            }
     }
 
     ImGui::End();

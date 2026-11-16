@@ -2,6 +2,7 @@
 // gta4nm.dll is loaded from mods/Delirium on first use (delay-loaded), with the NM data the user's GTA IV gave.
 #pragma once
 
+#include <array>
 #include <unordered_map>
 
 #include <delirium_portal.h>
@@ -66,6 +67,8 @@ public:
 
     // 47 is down (ragdolled or getting up): his own movement is off.
     bool HitmanDown();
+    // 47's body as capsules: end a, end b, radius (7 floats each). Empty without a body.
+    std::vector<std::array<float, 7>> HitmanCapsules();
     // 47 falling into a floor portal: the only time his body goes ragdoll (Billy); it goes through by itself.
     bool Dive(const SVector3& p_Vel);
 

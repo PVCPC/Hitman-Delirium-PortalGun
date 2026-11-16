@@ -2204,6 +2204,26 @@ void Delirium::SetPortals(const DpFrame* p_Frames) {
         m_Portals[0] = p_Frames[0], m_Portals[1] = p_Frames[1];
 }
 
+std::vector<std::array<float, 7>> Delirium::HitmanCapsules() {
+    std::scoped_lock s_Lock(m_Mutex);
+    std::vector<std::array<float, 7>> s_Out;
+
+    if (m_Pose.empty() || m_Pose[0].size() < c_Parts * 7)
+        return s_Out;
+
+    const bool s_Own = !m_Sizes.empty() && m_Sizes[0].size() == c_Parts * 5;
+
+    for (int i = 0; i < c_Parts && i < static_cast<int>(m_Half.size()); ++i) {
+        const float* s_T = &m_Pose[0][i * 7];
+        const float r = s_Own ? std::max(m_Sizes[0][i * 5], 0.06f) : m_Radius[i];
+        const float h = s_Own ? m_Sizes[0][i * 5 + 1] : m_Half[i];
+        const SVector3 c = V(s_T), y = Rotate(s_T + 3, SVector3(0.f, 1.f, 0.f)) * h;
+        s_Out.push_back({c.x - y.x, c.y - y.y, c.z - y.z, c.x + y.x, c.y + y.y, c.z + y.z, r});
+    }
+
+    return s_Out;
+}
+
 bool Delirium::HitmanDown() {
     const Body* b = Hitman();
     return b && (b->m_Ragdoll || b->m_Blend > 0.f);
