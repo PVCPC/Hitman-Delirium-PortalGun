@@ -519,7 +519,28 @@ bool Delirium::Start() {
 // the body itself, which threw it up and dropped it again every scan ("flying up and down").
 bool Delirium::BodyAt(const SVector3& p_At) const {
     for (const Body& b : m_Bodies) {
-        if (!b.m_Follow || !b.m_Agent)
+        if (!b.m_Agent || !b.m_Char)
+            continue;
+
+        // Billy: shot near walls they floated, sank into walls and contorted. The replays: 13 of 20 shot bodies had
+        // their ground ~0.55 m over the pelvis: the ground ray hit the NPC's own game ragdoll (on as it was shot, not
+        // yet followed, so the check below skipped it; its bodies still where the game made them). Its bodies are
+        // never ground, followed or not.
+        {
+            void* s_Rb[64]; // c_MaxRagdollBodies (declared further down)
+            int s_Bn[64];
+            void* s_Set = nullptr;
+            const int n = ReadRagdoll(b.m_Char, &s_Set, s_Rb, s_Bn);
+
+            for (int i = 0; i < n; ++i) {
+                const float4 t = static_cast<IPhysicsObject*>(s_Rb[i])->GetTransform().Trans;
+
+                if ((SVector3(t.x, t.y, t.z) - p_At).Length() < 0.35f)
+                    return true;
+            }
+        }
+
+        if (!b.m_Follow)
             continue;
 
         for (int k = 0; k < c_Parts; ++k) {
@@ -668,7 +689,11 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
                 SVector3 s_Hit, s_Normal;
                 float s_Z = s_Last->second;
 
-                if (p_Ray(s_Top, s_Top - SVector3(0.f, 0.f, 4.f), s_Hit, s_Normal)) {
+                // The middle (under the pelvis) can't be over the pelvis: anything there is the body itself.
+                const bool s_Mid = x == c_N / 2 && y == c_N / 2;
+                const SVector3 s_From = s_Mid ? SVector3(s_Top.x, s_Top.y, s_Pos[2]) : s_Top;
+
+                if (p_Ray(s_From, s_From - SVector3(0.f, 0.f, s_Mid ? 3.f : 4.f), s_Hit, s_Normal)) {
                     s_Z = s_Hit.z;
 
                     if (x == c_N / 2 && y == c_N / 2)
@@ -2338,6 +2363,32 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     std::ranges::sort(s_Hits);
     s_Hits.erase(std::unique(s_Hits.begin(), s_Hits.end()), s_Hits.end());
+
+    // Billy: after a while shots stopped making Delirium ragdolls. 29 bodies in his run (the dead stay on) filled the
+    // 31 there's ground for: the dead body furthest from 47 goes back to the game for each new one.
+    for (size_t k = 0; k < s_Hits.size() && m_Bodies.size() >= c_MaxMeshes - 1; ++k) {
+        auto s_Far = m_Bodies.end();
+        float s_Most = -1.f;
+
+        for (auto it = m_Bodies.begin(); it != m_Bodies.end(); ++it) {
+            float p[3], q[4];
+
+            if (!it->m_Npc || !it->m_Dead || !it->m_Agent)
+                continue;
+
+            nm_agent_get_part_transform(it->m_Agent, 0, p, q);
+
+            if (const float d = (V(p) - m_Eye).Length(); d > s_Most)
+                s_Most = d, s_Far = it;
+        }
+
+        if (s_Far == m_Bodies.end())
+            break;
+
+        Logger::Info("[Delirium] {}: dead {:.0f} m away, back to the game's ragdoll (room for a new body).", s_Far->m_Name, s_Most);
+        Detach(*s_Far);
+        m_Bodies.erase(s_Far);
+    }
 
     for (void* c : s_Hits) {
         // Billy: shot from afar (past the 15 m / 6 NPCs that get bodies), it reacted as Hitman's. Its body now.
