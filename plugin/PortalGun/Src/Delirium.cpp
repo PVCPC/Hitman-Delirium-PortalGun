@@ -773,14 +773,8 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
             s_Last->second = s_Verts[(c_N / 2 * c_N + c_N / 2) * 3 + 2];
         }
 
-        // A cell over an open portal in the floor is a hole: bodies fall in.
-        const auto s_OverPortal = [&](uint32_t a, uint32_t d) {
-            if (!m_PortalsOpen)
-                return false;
-
-            const float s_C[3] = {(s_Verts[a * 3] + s_Verts[d * 3]) * 0.5f, (s_Verts[a * 3 + 1] + s_Verts[d * 3 + 1]) * 0.5f,
-                (s_Verts[a * 3 + 2] + s_Verts[d * 3 + 2]) * 0.5f};
-
+        // A point over an open portal in the floor is in its hole: bodies fall in.
+        const auto s_InHole = [&](const float (&s_C)[3]) {
             for (const DpFrame& f : m_Portals) {
                 const float s_Z = dp_local_z(&f, &s_C);
                 const SVector3 n = Rotate(f.rot, SVector3(0.f, 0.f, 1.f));
@@ -797,12 +791,51 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
             return false;
         };
 
+        // Billy 11-16: 47 sat on a floor portal, or fell through the map. Whole 0.75 m cells were the hole, so it was
+        // one cell (too small) or reached past the opening, where his middle went down outside it and never went
+        // through. Near a floor portal each cell is cut into 8 x 8 and the hole follows the opening to 0.1 m.
+        constexpr int c_Sub = 8;
+
         for (int y = 0; y + 1 < c_N; ++y) {
             for (int x = 0; x + 1 < c_N; ++x) {
                 const uint32_t a = y * c_N + x, b = a + 1, c = a + c_N, d = c + 1;
+                float A[3], B[3], C[3], D[3];
 
-                if (!s_OverPortal(a, d))
+                for (int k = 0; k < 3; ++k)
+                    A[k] = s_Verts[a * 3 + k], B[k] = s_Verts[b * 3 + k], C[k] = s_Verts[c * 3 + k], D[k] = s_Verts[d * 3 + k];
+
+                bool s_Near = false;
+
+                if (m_PortalsOpen)
+                    for (const DpFrame& f : m_Portals)
+                        s_Near |= Rotate(f.rot, SVector3(0.f, 0.f, 1.f)).z > 0.7f &&
+                            std::hypot((A[0] + D[0]) * 0.5f - f.at[0], (A[1] + D[1]) * 0.5f - f.at[1]) < 2.5f &&
+                            std::abs((A[2] + D[2]) * 0.5f - f.at[2]) < 1.f;
+
+                if (!s_Near) {
                     s_Tris.insert(s_Tris.end(), {a, b, d, a, d, c});
+                    continue;
+                }
+
+                const uint32_t s_Base = static_cast<uint32_t>(s_Verts.size() / 3);
+
+                for (int j = 0; j <= c_Sub; ++j)
+                    for (int i = 0; i <= c_Sub; ++i) {
+                        const float u = float(i) / c_Sub, v = float(j) / c_Sub;
+
+                        for (int k = 0; k < 3; ++k)
+                            s_Verts.push_back((A[k] * (1 - u) + B[k] * u) * (1 - v) + (C[k] * (1 - u) + D[k] * u) * v);
+                    }
+
+                for (int j = 0; j < c_Sub; ++j)
+                    for (int i = 0; i < c_Sub; ++i) {
+                        const uint32_t sa = s_Base + j * (c_Sub + 1) + i, sb = sa + 1, sc = sa + c_Sub + 1, sd = sc + 1;
+                        const float s_M[3] = {(s_Verts[sa * 3] + s_Verts[sd * 3]) * 0.5f,
+                            (s_Verts[sa * 3 + 1] + s_Verts[sd * 3 + 1]) * 0.5f, (s_Verts[sa * 3 + 2] + s_Verts[sd * 3 + 2]) * 0.5f};
+
+                        if (!s_InHole(s_M))
+                            s_Tris.insert(s_Tris.end(), {sa, sb, sd, sa, sd, sc});
+                    }
             }
         }
 
@@ -3081,7 +3114,15 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         b.m_PortalHad = true;
 
         for (int i = 0; i < 2 && s_Had; ++i) {
-            if (!dp_crossed(&m_Portals[i], s_Was[i], &s_C))
+            // Floors and ceilings: his middle can go down just past the opening's 0.83 while he tips over its rim, and
+            // then he fell through the map (Billy 11-16). Tested pulled 0.7 toward the portal: the whole opening counts.
+            const DpFrame& s_F = m_Portals[i];
+            const bool s_Flat = std::abs(Rotate(s_F.rot, SVector3(0.f, 0.f, 1.f)).z) > 0.7f;
+            const float s_Pull = s_Flat ? 0.7f : 1.f;
+            const float s_Cp[3] = {s_F.at[0] + (s_C[0] - s_F.at[0]) * s_Pull, s_F.at[1] + (s_C[1] - s_F.at[1]) * s_Pull,
+                s_F.at[2] + (s_C[2] - s_F.at[2]) * s_Pull};
+
+            if (!dp_crossed(&s_F, s_Was[i], &s_Cp))
                 continue;
 
             const DpFrame& s_From = m_Portals[i];

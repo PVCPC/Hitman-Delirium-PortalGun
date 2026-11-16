@@ -1362,6 +1362,14 @@ bool PortalGun::TryTeleport(Portal& p_In, Portal& p_Out, ZSpatialEntity* p_Hitma
     // Portal keeps the player's speed and turns his velocity with the portal pair.
     const SVector3 s_InVel = m_Flying ? m_FlyVel : m_WalkVel;
 
+    // Billy 11-16: jumping into a portal is Delirium: he goes in as his ragdoll and his body goes through by itself.
+    if (m_Flying && m_Delirium.Dive(s_InVel)) {
+        m_Flying = false;
+        m_Cooldown = c_TeleportCooldown;
+        Logger::Info("[PortalGun] Jumped into a portal at {:.1f} m/s: ragdoll.", s_InVel.Length());
+        return true;
+    }
+
     SVector3 s_OutVel = MapDirection(s_InVel, s_InTrans, p_Out.m_Transform);
 
     SMatrix s_NewTrans = ExitTransform(p_PlayerTrans, s_InTrans, p_Out.m_Transform);
