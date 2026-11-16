@@ -776,37 +776,30 @@ void Delirium::UpdateGround(const Ray& p_Ray, bool p_One) {
                 return false;
             });
 
-        for (const Wall& w : s_Walls) {
-            const SVector3 s_Side(-w.m_N.y, w.m_N.x, 0.f);
-            const float h = w.m_Half;
-            constexpr float c_Thick = 0.8f;
-
-            // Pelican: every panel, always. Skipping one with a part in it let a limb 0.1-0.3 m into the face take the
-            // whole wall away (Billy: Homer through walls); in front of the 0.8 m slab's midline, contact pushes it back out.
-
-            const uint32_t s_Base = static_cast<uint32_t>(s_Verts.size() / 3);
-
-            // Front face at the hit, back face c_Thick behind it; bottom on the floor (Pelican), top 2.2 m up.
-            for (const float s_Back : {0.f, c_Thick})
-                for (const auto [sx, sz] : {std::pair {-h, 0.f}, {h, 0.f}, {h, 2.2f}, {-h, 2.2f}}) {
-                    const SVector3 v = w.m_Hit + s_Side * sx - w.m_N * s_Back;
-                    s_Verts.insert(s_Verts.end(), {v.x, v.y, w.m_Floor + sz});
-                }
-
-            // NM's triangles block one side only, the side (v1-v0)x(v2-v0) faces (Pelican): every face here points out of
-            // the slab (front toward the body, back away, top up, ends sideways); the ground's point up.
-            const uint32_t f0 = s_Base, f1 = s_Base + 1, f2 = s_Base + 2, f3 = s_Base + 3;
-            const uint32_t b0 = s_Base + 4, b1 = s_Base + 5, b2 = s_Base + 6, b3 = s_Base + 7;
-            s_Tris.insert(s_Tris.end(), {f0, f1, f2, f0, f2, f3, b0, b2, b1, b0, b3, b2, f3, f2, b2, f3, b2, b3, f0, f3, b3,
-                f0, b3, b0, f1, b1, b2, f1, b2, f2});
-        }
-
         if (s_Tris.empty())
             s_Tris = {0, 1, 2};
 
         nm_world_set_mesh(m_World, static_cast<int>(p), s_Verts.data(), static_cast<int>(s_Verts.size() / 3), s_Tris.data(),
             static_cast<int>(s_Tris.size() / 3), nullptr);
     }
+
+    // Every body's wall panels as solid boxes (Pelican: nm_world_set_walls, delirium 10f5e0a87; a box holds a body at any
+    // speed, triangle slabs let fast ones through). 0.8 m deep behind the hit face, 2.2 m up from the floor; one call for
+    // the whole world (it replaces the last).
+    std::vector<float> s_Boxes;
+
+    for (const auto& [s_Agent, s_List] : m_Walls)
+        for (const Wall& w : s_List) {
+            if (std::ranges::find(s_Agents, s_Agent) == s_Agents.end()) // a body since gone: not its walls
+                break;
+
+            const float s_Yaw = std::atan2(-w.m_N.y, -w.m_N.x); // X onto -n
+            const SVector3 c = w.m_Hit - w.m_N * 0.4f;
+            s_Boxes.insert(s_Boxes.end(), {c.x, c.y, w.m_Floor + 1.1f, 0.f, 0.f, std::sin(s_Yaw * 0.5f), std::cos(s_Yaw * 0.5f),
+                0.4f, w.m_Half, 1.1f});
+        }
+
+    nm_world_set_walls(m_World, s_Boxes.data(), static_cast<int>(s_Boxes.size() / 10));
 }
 
 NmAgent* Delirium::Target(int t, std::string*& p_Name, float*& p_Health, Body*& p_Body) {
