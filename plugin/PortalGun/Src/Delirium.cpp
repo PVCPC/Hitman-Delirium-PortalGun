@@ -2556,7 +2556,8 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         // ponytail: 47 doesn't play a shove or reach his hands onto the chest (IK); add with Hitman's push clip.
         const auto s_Move = [](float v) { return v < 0.3f ? 1 : v < 2.5f ? 2 : v < 5.f ? 3 : 4; };
         const SMatrix s_HM = h->m_Spatial->GetObjectToWorldMatrix();
-        const SVector3 s_HF = SVector3(s_HM.YAxis.x, s_HM.YAxis.y, 0.f).Normalized();
+        // Facing: the way he walks when he does (GTA's shove needs the NPC in front: forward . (it - him) > 0).
+        const SVector3 s_HF = s_Vel.Length() > 0.3f ? s_Vel.Normalized() : SVector3(s_HM.YAxis.x, s_HM.YAxis.y, 0.f).Normalized();
 
         for (Body& b : m_Bodies) {
             b.m_Stagger = std::max(0.f, b.m_Stagger - p_Dt);
@@ -2581,8 +2582,9 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             int s_Side = -1, s_Clip = -1;
             const int s_R = nm_player_bump(m_World, s_Move(s_Vel.Length()), s_Move(s_NpV), s_Me, s_Other, b.m_Health, 1.3f, 1.3f,
                 m_ShovedLast == b.m_Agent ? NM_BUMP_SHOVED_LAST : 0, &s_Side, &s_Clip);
-            Logger::Info("[Delirium] 47 bumped {} at {:.1f} m/s: {} (side {}, clip {}).", b.m_Name, s_Vel.Length(),
-                std::array {"nothing", "shove", "flinch", "knocked over"}[std::clamp(s_R, 0, 3)], s_Side, s_Clip);
+            Logger::Info("[Delirium] 47 bumped {} at {:.1f} m/s: {} (side {}, clip {}; health {:.0f}, ahead {:.2f}, its facing "
+                "vs his {:.2f}).", b.m_Name, s_Vel.Length(), std::array {"nothing", "shove", "flinch", "knocked over"}[std::clamp(s_R, 0, 3)],
+                s_Side, s_Clip, b.m_Health, s_HF.Dot(s_D.Normalized()), s_HF.Dot(SVector3(s_HM.YAxis.x, s_HM.YAxis.y, 0.f).Normalized()));
 
             // GTA's answer is the player's; the bumped body is pushed by the touch itself. Hitman's NPC is on its
             // animation until then, so "nothing" still staggers it at a run (the guide's 2.5 m/s rule).
