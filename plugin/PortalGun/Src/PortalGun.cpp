@@ -153,6 +153,10 @@ namespace {
         return ToVec3(p_Portal.Inverse().WVectorTransform(float4(p_World, 1.f)));
     }
 
+
+    SVector3 ToWorld(const SMatrix& p_Portal, const SVector3& p_Local) {
+        return ToVec3(p_Portal.WVectorTransform(float4(p_Local, 1.f)));
+    }
     bool g_Square = false; // rectangle portals instead of ovals (the Portals tab)
 
     bool InsideOval(const SVector3& p_Local, float p_Margin = 0.f) {
@@ -685,6 +689,7 @@ void PortalGun::DrawPortalTab() {
     ImGui::Checkbox("Corner picture (if the portal views go dark or white; next level load)", &m_CornerPicture);
     ImGui::SameLine();
     ImGui::Checkbox("Show portal cameras", &m_ShowCameras);
+    ImGui::SliderFloat("Portal view brightness", &m_ViewExposure, 0.005f, 1.f, "%.3f", ImGuiSliderFlags_Logarithmic);
     ImGui::SliderFloat("Volume", &m_Volume, 0.f, 1.f, "%.2f");
 }
 
@@ -1360,15 +1365,19 @@ bool PortalGun::TryTeleport(Portal& p_In, Portal& p_Out, ZSpatialEntity* p_Hitma
     if (s_WallPortal && !m_Flying) {
         const SVector3 s_N = ToVec3(s_InTrans.YAxis);
         const SVector3 s_W = Wish();
-        const bool s_Toward = s_W.Length() > 0.01f && s_W.Normalized().Dot(s_N) < -0.3f;
+        // Billy 11-17: "very hard to walk through now". Toward it: keys pointing at it at all, or walking at it.
+        const float s_KeysIn = s_W.Length() > 0.01f ? -s_W.Normalized().Dot(s_N) : 0.f;
+        const bool s_Toward = s_KeysIn > 0.f || -m_WalkVel.Dot(s_N) > 0.3f;
+        const bool s_Away = s_KeysIn < -0.2f;
 
-        if (m_WalkIn != &p_In && s_Inside && s_Local.y >= 0.f && s_PrevSide >= -0.05f && s_Toward) {
+        if (m_WalkIn != &p_In && InsideOval(s_Local3, 0.25f) && s_Local.y >= 0.f && s_Local.y < 0.7f &&
+            s_PrevSide >= -0.05f && s_Toward) {
             m_WalkIn = &p_In;
             m_WalkInY = s_Local.y;
         }
 
         if (m_WalkIn == &p_In) {
-            if (!s_Toward || !InsideOval(s_Local3, 0.25f)) {
+            if (s_Away || !InsideOval(s_Local3, 0.35f)) {
                 m_WalkIn = nullptr; // turned away: the game has him again
                 return false;
             }
@@ -2577,8 +2586,18 @@ void PortalGun::UpdateClone(ZHitman5* p_Hitman, const SMatrix& p_Trans) {
     }
 
     if (!s_In) {
+        // Billy 11-17: never posed in a whole run: 100 m underground Hitman stopped animating it (no bone update
+        // ever came). Parked 2 m behind a portal's wall instead, in the world, out of sight, still animated.
+        const Portal& s_Park = m_Orange.m_Placed ? m_Orange : m_Blue;
         SMatrix s_Hide = p_Trans;
-        s_Hide.Trans.z -= 100.f;
+
+        if (s_Park.m_Placed) {
+            const SVector3 s_Behind = ToWorld(s_Park.m_Transform, SVector3(0.f, -2.f, -1.f));
+            s_Hide.Trans.x = s_Behind.x, s_Hide.Trans.y = s_Behind.y, s_Hide.Trans.z = s_Behind.z;
+        }
+        else
+            s_Hide.Trans.z -= 3.f;
+
         s_Spatial->SetObjectToWorldMatrixFromEditor(s_Hide);
         return;
     }
@@ -2826,7 +2845,7 @@ void PortalGun::DrawViews() {
             return false;
         };
 
-        const int s_Rows = s_Cuts.empty() ? c_Strips : 64, s_Cols = s_Cuts.empty() ? 1 : 32;
+        const int s_Rows = s_Cuts.empty() ? c_Strips : 112, s_Cols = s_Cuts.empty() ? 1 : 56;
         std::vector<ImVec2> s_P((s_Rows + 1) * (s_Cols + 1));
         std::vector<char> s_Ok(s_P.size());
 
@@ -2873,8 +2892,10 @@ void PortalGun::DrawViews() {
 
                 const auto uv = [&](const ImVec2& p) { return ImVec2(p.x / m_ScreenW, p.y / m_ScreenH); };
                 s_List->PrimReserve(6, 4);
+                // Billy 11-17: washed out white. The texture is the scene before Hitman's exposure (format 26,
+                // R11G11B10 float), so it's scaled down here, the one knob a draw has (no tone curve).
                 s_List->PrimQuadUV(s_P[i0], s_P[i1], s_P[i2], s_P[i3], uv(s_P[i0]), uv(s_P[i1]), uv(s_P[i2]), uv(s_P[i3]),
-                    IM_COL32_WHITE);
+                    ImGui::GetColorU32(ImVec4(m_ViewExposure, m_ViewExposure, m_ViewExposure, 1.f)));
             }
 
         // Move what went into the trailing command into the image's.

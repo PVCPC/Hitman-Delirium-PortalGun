@@ -165,6 +165,7 @@ private:
     Delirium m_Delirium;
     float m_Volume = 0.3f;
     bool m_ShowCameras = false;
+    float m_ViewExposure = 0.08f; // the portal camera's picture is unexposed HDR (R11G11B10 float): scaled by this
     bool m_RightWasDown = false;
     void DrawPortalTab();
     TResourcePtr<ZTemplateEntityFactory> m_ViewFactory;

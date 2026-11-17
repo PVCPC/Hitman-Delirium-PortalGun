@@ -163,3 +163,9 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 125 | 47 doesn't get up after ragdolling through a portal | 00:04 log: down 50 s+, joints past limits, never 'still' for NM. Now up after 2.5 s with his middle under 0.5 m/s. Built. |
 | 13 | (update) copy of 47 | 00:03 log: spawned and dressed, but never posed (no bones line). Now logs why. |
 | 14/67 | (update) washed out | Still open; the texture's format is now logged to see if the picture can be scaled down. |
+| 126 | 11-17 can thrown at a man: he stands | Hitman doesn't knock anyone out with a can, so nothing reached Delirium. Now any loose item moving 6-40 m/s within 0.5 m of a person (feet to head) knocks him with Delirium (2 s per person). Built, untested. |
+| 66 | (11-17) very hard to walk through portals now | Walk-in needed keys pointing within ~70 deg of straight in and the body fully inside the oval. Now: any key component toward it, or walking at it, within the oval + 0.25 m, up to 0.7 m out; only keys pointing away cancel. Built, untested. |
+| 127 | 11-17 47 got up after a floor-portal ragdoll and fell through the map | He got up lying in the opening, stood in the hole. Now: get-up while his middle is over a floor portal's opening sends him through instead; any transit puts the body 0.4 m out in front of the exit (lying on the rim used to land him in the wall). Built, untested. |
+| 14 | (11-17) washed out white | Log: the texture is format 26 = R11G11B10 float, the scene before Hitman's exposure. Picture now scaled by 0.08 (Portals tab slider 'Portal view brightness' if it's off). 47's cut-out grid 112x56 (was 64x32, blocky). Built, untested. |
+| 13 | (11-17) copy of 47 never posed | Log: its animator never updated (100 m underground). Now parked 2 m behind a portal's wall instead. Built, untested. |
+| 125 | (11-17) Delirium dll | Pelican's rebuilt gta4nm.dll (get-up when nearly still) installed. |

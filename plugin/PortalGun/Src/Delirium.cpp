@@ -9,6 +9,7 @@
 #include <Glacier/ZEntity.h>
 #include <Glacier/ZPhysics.h>
 #include <Glacier/ZModule.h>
+#include <Glacier/ZWorldInventory.h>
 #include <Glacier/SExternalReferences.h>
 #include <Glacier/EntityFactory.h>
 #include <Globals.h>
@@ -2197,6 +2198,53 @@ void Delirium::Detach(Body& p_Body) {
     p_Body.m_Build = nullptr;
 }
 
+void Delirium::Transit(Body& b, int i) {
+    // The whole body out of the other portal, turned, its speed turned with it (the Playroom's transit).
+    const int s_Parts = nm_agent_part_count(b.m_Agent);
+    float s_Com[3], s_Vel[3];
+    const DpFrame& s_From = m_Portals[i];
+    const DpFrame& s_To = m_Portals[1 - i];
+
+    for (int k = 0; k < s_Parts; ++k) {
+        float s_P[3], s_Q[4], s_V[3], s_W[3];
+        nm_agent_get_part_transform(b.m_Agent, k, s_P, s_Q);
+        nm_agent_get_part_velocity(b.m_Agent, k, s_V, s_W);
+        dp_through(&s_From, &s_To, &s_P, &s_V, &s_Q);
+        dp_through(&s_From, &s_To, nullptr, &s_W, nullptr);
+        nm_agent_set_part_state(b.m_Agent, k, s_P, s_Q, s_V, s_W);
+    }
+
+    // Out in front of the other one: a body sent through while lying on the rim (its middle not under the plane)
+    // would come out behind that surface, in the wall.
+    nm_agent_get_com(b.m_Agent, s_Com, s_Vel);
+
+    if (const float z = dp_local_z(&s_To, &s_Com); z < 0.4f) {
+        const SVector3 n = Rotate(s_To.rot, SVector3(0.f, 0.f, 1.f)) * (0.4f - z);
+
+        for (int k = 0; k < s_Parts; ++k) {
+            float s_P[3], s_Q[4], s_V[3], s_W[3];
+            nm_agent_get_part_transform(b.m_Agent, k, s_P, s_Q);
+            nm_agent_get_part_velocity(b.m_Agent, k, s_V, s_W);
+            s_P[0] += n.x, s_P[1] += n.y, s_P[2] += n.z;
+            nm_agent_set_part_state(b.m_Agent, k, s_P, s_Q, s_V, s_W);
+        }
+    }
+
+    nm_agent_get_com(b.m_Agent, s_Com, s_Vel);
+    float s_Drop[3];
+    dp_exit_gimme(&s_To, &s_Vel, &s_Drop);
+    const float s_Back[3] = {-s_Drop[0], -s_Drop[1], -s_Drop[2]};
+
+    if (s_Drop[0] != 0.f || s_Drop[1] != 0.f || s_Drop[2] != 0.f)
+        nm_agent_add_velocity(b.m_Agent, s_Back);
+
+    b.m_PortalHad = false;
+    b.m_PoseA.clear();
+    m_GroundTimer = 0.f;
+    Logger::Info("[Delirium] {} through the {} portal at {:.1f} m/s.", b.m_Name, i ? "orange" : "blue",
+        std::sqrt(s_Vel[0] * s_Vel[0] + s_Vel[1] * s_Vel[1] + s_Vel[2] * s_Vel[2]));
+}
+
 void Delirium::SetPortals(const DpFrame* p_Frames) {
     m_PortalsOpen = p_Frames != nullptr;
 
@@ -2222,6 +2270,31 @@ std::vector<std::array<float, 7>> Delirium::HitmanCapsules() {
     }
 
     return s_Out;
+}
+
+int Delirium::InFloorPortal(const Body& b) const {
+    if (!m_PortalsOpen)
+        return -1;
+
+    float s_C[3], s_V[3];
+    nm_agent_get_com(b.m_Agent, s_C, s_V);
+
+    for (int i = 0; i < 2; ++i) {
+        const DpFrame& f = m_Portals[i];
+        const SVector3 n = Rotate(f.rot, SVector3(0.f, 0.f, 1.f));
+        const float z = dp_local_z(&f, &s_C);
+
+        if (n.z < 0.7f || z < -1.5f || z > 1.2f)
+            continue;
+
+        const float s_On[3] = {f.at[0] + (s_C[0] - n.x * (z + 0.05f) - f.at[0]) * 0.85f,
+            f.at[1] + (s_C[1] - n.y * (z + 0.05f) - f.at[1]) * 0.85f, f.at[2] + (s_C[2] - n.z * (z + 0.05f) - f.at[2]) * 0.85f};
+
+        if (dp_crossed(&f, 1.f, &s_On))
+            return i;
+    }
+
+    return -1;
 }
 
 bool Delirium::HitmanDown() {
@@ -2654,6 +2727,53 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
     // Billy: an object thrown at someone should knock him off balance and over, not hard. Hitman knocks him out
     // (pacified, not dead) with 47 out of reach (not a choke or a punch): a gentle push from 47's side, then down.
     std::vector<void*> s_Throws;
+
+    // Billy 11-17: a can to the head and he stood on: Hitman doesn't knock anyone out with a can, and no hit event
+    // reaches us. So the items themselves: one moving over 6 m/s within 0.5 m of someone (feet to head) hits him.
+    if (Globals::WorldInventory && Globals::ActorManager && p_Dt > 0.f) {
+        std::unordered_map<const void*, SVector3> s_Now;
+
+        for (const auto& it : Globals::WorldInventory->m_aItems) {
+            const auto s_Sp = it.m_entityRef ? it.m_entityRef.QueryInterface<ZSpatialEntity>() : nullptr;
+
+            if (!s_Sp)
+                continue;
+
+            const float4 t = s_Sp->GetObjectToWorldMatrix().Trans;
+            const SVector3 s_P(t.x, t.y, t.z);
+
+            if ((s_P - m_Eye).Length() > 30.f)
+                continue;
+
+            s_Now[it.m_pInterfaceRef] = s_P;
+            const auto s_Was = m_ItemAt.find(it.m_pInterfaceRef);
+
+            if (s_Was == m_ItemAt.end() || (s_P - s_Was->second).Length() < 6.f * p_Dt || // over 6 m/s: not carried by someone sprinting
+                (s_P - s_Was->second).Length() > 40.f * p_Dt)
+                continue;
+
+            for (const auto& e : Globals::ActorManager->m_activatedActors) {
+                ZActor* a = e.m_pInterfaceRef;
+                const auto s_A = a && a != m_Ignore && !a->IsDead() && e.m_entityRef ? e.m_entityRef.QueryInterface<ZSpatialEntity>() : nullptr;
+
+                if (!s_A)
+                    continue;
+
+                const float4 f = s_A->GetObjectToWorldMatrix().Trans;
+                const SVector3 s_Near(f.x, f.y, std::clamp(s_P.z, f.z + 0.1f, f.z + 1.8f));
+                float& s_Last = m_ItemHitAt[a];
+
+                if ((s_P - s_Near).Length() < 0.5f && m_Clock - s_Last > 2.f) {
+                    s_Last = m_Clock;
+                    s_Throws.push_back(a);
+                    Logger::Info("[Delirium] An item at {:.1f} m/s hit {}.", (s_P - s_Was->second).Length() / p_Dt,
+                        a->m_sActorName.c_str());
+                }
+            }
+        }
+
+        m_ItemAt = std::move(s_Now);
+    }
 
     if (Globals::ActorManager)
         for (const auto& e : Globals::ActorManager->m_activatedActors)
@@ -3189,31 +3309,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             if (!s_Under && !dp_crossed(&s_F, s_Was[i], &s_Cp))
                 continue;
 
-            const DpFrame& s_From = m_Portals[i];
-            const DpFrame& s_To = m_Portals[1 - i];
-
-            for (int k = 0; k < s_Parts; ++k) {
-                float s_P[3], s_Q[4], s_V[3], s_W[3];
-                nm_agent_get_part_transform(b.m_Agent, k, s_P, s_Q);
-                nm_agent_get_part_velocity(b.m_Agent, k, s_V, s_W);
-                dp_through(&s_From, &s_To, &s_P, &s_V, &s_Q);
-                dp_through(&s_From, &s_To, nullptr, &s_W, nullptr);
-                nm_agent_set_part_state(b.m_Agent, k, s_P, s_Q, s_V, s_W);
-            }
-
-            nm_agent_get_com(b.m_Agent, s_Com, s_Vel);
-            float s_Drop[3];
-            dp_exit_gimme(&s_To, &s_Vel, &s_Drop);
-            const float s_Back[3] = {-s_Drop[0], -s_Drop[1], -s_Drop[2]};
-
-            if (s_Drop[0] != 0.f || s_Drop[1] != 0.f || s_Drop[2] != 0.f)
-                nm_agent_add_velocity(b.m_Agent, s_Back);
-
-            b.m_PortalHad = false;
-            b.m_PoseA.clear();
-            m_GroundTimer = 0.f;
-            Logger::Info("[Delirium] {} through the {} portal at {:.1f} m/s.", b.m_Name, i ? "orange" : "blue",
-                std::sqrt(s_Vel[0] * s_Vel[0] + s_Vel[1] * s_Vel[1] + s_Vel[2] * s_Vel[2]));
+            Transit(b, i);
             break;
         }
     }
@@ -3275,6 +3371,14 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
         if (s_Settled || nm_agent_should_get_up(b.m_Agent, 1.f) == 1 || b.m_SlowT > 2.5f) {
             b.m_SlowT = 0.f;
+
+            // Billy 11-17: he got up lying in a floor portal's opening, stood in the hole and fell through the map.
+            // Lying in one: through it, not up.
+            if (const int s_P = InFloorPortal(b); s_P >= 0) {
+                Transit(b, s_P);
+                continue;
+            }
+
             Logger::Info("[Delirium] {} {}.", b.m_Name, s_Settled ? "kept his feet; back on his animation" : "gets up");
             b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
         }

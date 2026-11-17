@@ -83,6 +83,8 @@ public:
     bool m_Wire = false; // bodies drawn as outlines
     std::unordered_map<int, std::array<float, 7>> m_GoodOffAll; // Follow: good offsets per (skeleton's bone count << 16 | bone)
     float m_Clock = 0.f; // seconds of Update
+    std::unordered_map<const void*, SVector3> m_ItemAt;   // each loose item's place last frame (thrown ones hit people)
+    std::unordered_map<const void*, float> m_ItemHitAt;   // each actor's last hit by one (m_Clock)
 
 private:
     struct Ped {
@@ -155,6 +157,8 @@ private:
         std::string m_Name;
         float m_Health = 200.f;
     };
+    void Transit(Body& b, int p_Portal); // whole body out of the other portal
+    int InFloorPortal(const Body& b) const; // the floor portal its middle is in (-1 none)
 
     bool Start();
     bool Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool p_Npc, bool p_Female, const Ray& p_Ray,
