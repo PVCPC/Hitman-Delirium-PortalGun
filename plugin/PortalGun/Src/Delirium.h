@@ -107,6 +107,7 @@ private:
         bool m_GettingUp = false; // (unused since the learned get-up went)
         float m_GetUpTime = 0.f;
         bool m_HighFall = false;
+        float m_SlowT = 0.f; // down and barely moving (s): up after 2.5 s even if NM never calls him still
         float m_SettledT = 0.f; // s standing still on its feet while a ragdoll
         bool m_Ko = false;      // knocked out by a thrown object: loses balance, falls, stays down
         bool m_KoOut = false;   // limp (out cold) after the knock

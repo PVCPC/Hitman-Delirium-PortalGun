@@ -3265,7 +3265,16 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             Logger::Info("[Delirium] {}: comes to; gets up.", b.m_Name);
         }
 
-        if (s_Settled || nm_agent_should_get_up(b.m_Agent, 1.f) == 1) {
+        // Billy 11-17: 47 never got up after a portal fall. Bent past his joint limits on the ground he kept
+        // twitching, so NM never called him still. His middle under 0.5 m/s for 2.5 s: up.
+        {
+            float s_C[3], s_V[3];
+            nm_agent_get_com(b.m_Agent, s_C, s_V);
+            b.m_SlowT = s_V[0] * s_V[0] + s_V[1] * s_V[1] + s_V[2] * s_V[2] < 0.25f ? b.m_SlowT + p_Dt : 0.f;
+        }
+
+        if (s_Settled || nm_agent_should_get_up(b.m_Agent, 1.f) == 1 || b.m_SlowT > 2.5f) {
+            b.m_SlowT = 0.f;
             Logger::Info("[Delirium] {} {}.", b.m_Name, s_Settled ? "kept his feet; back on his animation" : "gets up");
             b.m_Npc ? SetRagdoll(b, false) : SetHitmanRagdoll(false);
         }

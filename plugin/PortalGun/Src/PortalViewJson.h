@@ -77,7 +77,7 @@ inline constexpr const char* c_PortalViewJson = R"(
                 },
                 "m_bIsPIP": {
                     "type": "bool",
-                    "value": true
+                    "value": false
                 },
                 "m_bDrawGates": {
                     "type": "bool",

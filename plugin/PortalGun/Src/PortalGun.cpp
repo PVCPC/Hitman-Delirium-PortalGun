@@ -2594,8 +2594,15 @@ void PortalGun::UpdateClone(ZHitman5* p_Hitman, const SMatrix& p_Trans) {
 
     std::vector<Bones::SQV> s_His, s_Its;
 
-    if (!s_Mine || !m_CloneAnim || !Bones::Drawn(s_Mine, s_His) || !Bones::Read(m_CloneAnim, s_Its))
+    if (!s_Mine || !m_CloneAnim || !Bones::Drawn(s_Mine, s_His) || !Bones::Read(m_CloneAnim, s_Its)) {
+        static int s_Said = 0;
+
+        if (s_Said++ < 3)
+            Logger::Warn("[PortalGun] Portal copy of 47 not posed: his animator {}, its {}, his pose {}, its {}.", s_Mine != nullptr,
+                m_CloneAnim != nullptr, s_Mine && Bones::Drawn(s_Mine, s_His), m_CloneAnim && Bones::Read(m_CloneAnim, s_Its));
+
         return;
+    }
 
     if (m_CloneMap.size() != s_Its.size()) {
         std::string w1, w2;
@@ -2831,14 +2838,26 @@ void PortalGun::DrawViews() {
                 s_Ok[k * (s_Cols + 1) + j] = s_Screen(-s_W + 2.f * s_W * j / s_Cols, s_Z, s_P[k * (s_Cols + 1) + j]);
         }
 
+        // The SDK draws the game's texture between two callbacks that switch the descriptor heap: one image, then
+        // every other cell's quad written into that same draw command (Billy 11-17: a quad of its own came out
+        // with ImGui's font texture).
         ImGui::SetCursorScreenPos(ImVec2(0.f, 0.f));
         SDK()->ImGuiGameRenderTarget(s_Rt, ImVec2(1.f, 1.f));
         ImDrawList* s_List = ImGui::GetWindowDrawList();
-        const ImTextureRef s_Tex = s_List->_CmdHeader.TexRef;
+        int s_Img = -1;
 
-        if (s_List->VtxBuffer.Size >= 4) // the 1 px image that set the texture: nothing
-            for (int v = 1; v <= 4; ++v)
-                s_List->VtxBuffer.Data[s_List->VtxBuffer.Size - v].pos = ImVec2(0.f, 0.f);
+        for (int c = s_List->CmdBuffer.Size - 1; c >= std::max(0, s_List->CmdBuffer.Size - 4); --c)
+            if (!s_List->CmdBuffer[c].UserCallback && s_List->CmdBuffer[c].ElemCount > 0) {
+                s_Img = c;
+                break;
+            }
+
+        if (s_Img < 0 || s_List->VtxBuffer.Size < 4 || s_List->CmdBuffer.back().ElemCount != 0 ||
+            s_List->CmdBuffer.back().UserCallback || s_Img == s_List->CmdBuffer.Size - 1)
+            continue;
+
+        for (int v = 1; v <= 4; ++v) // the 1 px image itself: nothing
+            s_List->VtxBuffer.Data[s_List->VtxBuffer.Size - v].pos = ImVec2(0.f, 0.f);
 
         for (int k = 0; k < s_Rows; ++k)
             for (int j = 0; j < s_Cols; ++j) {
@@ -2853,8 +2872,25 @@ void PortalGun::DrawViews() {
                     continue;
 
                 const auto uv = [&](const ImVec2& p) { return ImVec2(p.x / m_ScreenW, p.y / m_ScreenH); };
-                s_List->AddImageQuad(s_Tex, s_P[i0], s_P[i1], s_P[i2], s_P[i3], uv(s_P[i0]), uv(s_P[i1]), uv(s_P[i2]), uv(s_P[i3]));
+                s_List->PrimReserve(6, 4);
+                s_List->PrimQuadUV(s_P[i0], s_P[i1], s_P[i2], s_P[i3], uv(s_P[i0]), uv(s_P[i1]), uv(s_P[i2]), uv(s_P[i3]),
+                    IM_COL32_WHITE);
             }
+
+        // Move what went into the trailing command into the image's.
+        const unsigned s_Added = s_List->CmdBuffer.back().ElemCount;
+        s_List->CmdBuffer[s_Img].ElemCount += s_Added;
+
+        for (int c = s_Img + 1; c < s_List->CmdBuffer.Size; ++c)
+            s_List->CmdBuffer[c].IdxOffset += s_Added;
+
+        s_List->CmdBuffer.back().ElemCount = 0;
+
+        if (!s_View.m_FormatLogged) {
+            s_View.m_FormatLogged = true;
+            Logger::Info("[PortalGun] See-through {}: texture format {}.", i ? "orange" : "blue",
+                static_cast<int>(s_Rt->m_pTexture2D->m_pResource->GetDesc().Format));
+        }
     }
 
     ImGui::End();
