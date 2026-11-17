@@ -169,3 +169,4 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 14 | (11-17) washed out white | Log: the texture is format 26 = R11G11B10 float, the scene before Hitman's exposure. Picture now scaled by 0.08 (Portals tab slider 'Portal view brightness' if it's off). 47's cut-out grid 112x56 (was 64x32, blocky). Built, untested. |
 | 13 | (11-17) copy of 47 never posed | Log: its animator never updated (100 m underground). Now parked 2 m behind a portal's wall instead. Built, untested. |
 | 125 | (11-17) Delirium dll | Pelican's rebuilt gta4nm.dll (get-up when nearly still) installed. |
+| 126 | (11-17) correction | A can, extinguisher or hammer to the head = Hitman knocks him out until woken. The close throw was left out (2.5 m rule meant for chokes/punches): now 1.2 m. Knocked out in Hitman: limp at once (0.15 s), down until Hitman wakes him. Built, untested. |

@@ -2798,8 +2798,12 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
                     if (ZSpatialEntity* s = e.m_entityRef.QueryInterface<ZSpatialEntity>()) {
                         const float4 t = s->GetObjectToWorldMatrix().Trans;
 
-                        if ((SVector3(t.x, t.y, m_Eye.z) - m_Eye).Length() > 2.5f)
+                        // Billy 11-17: a can to the head from close stood on: 2.5 m left out close throws. A choke or
+                        // a punch has 47 touching him; past 1.2 m it's something thrown.
+                        if ((SVector3(t.x, t.y, m_Eye.z) - m_Eye).Length() > 1.2f) {
                             s_Throws.push_back(a);
+                            Logger::Info("[Delirium] {}: knocked out in Hitman.", a->m_sActorName.c_str());
+                        }
                     }
 
                 s_Was = s_Pac;
@@ -3347,7 +3351,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             b.m_KoT += p_Dt;
             const bool s_Out = b.m_Npc && static_cast<ZActor*>(b.m_Char)->IsPacified();
 
-            if (!b.m_KoOut && b.m_KoT > 0.6f) {
+            if (!b.m_KoOut && (b.m_KoT > 0.6f || (s_Out && b.m_KoT > 0.15f))) { // knocked out in Hitman: out at once
                 nm_agent_set_dead(b.m_Agent, 1);
                 b.m_KoOut = true;
                 Logger::Info("[Delirium] {}: out cold, falls.", b.m_Name);
