@@ -33,6 +33,144 @@
 #include <Glacier/EntityFactory.h>
 #include <Glacier/SExternalReferences.h>
 #include <Glacier/CompileReflection.h>
+#include <mutex>
+#include <atomic>
+#include <unordered_map>
+#include <cfloat>
+
+// Billy 11-17: half the map gone in the portal view. A flat near plane at the exit's centre cut the near half of
+// the view too early and let the wall through on the other. Portal 2's way: the projection's near plane moved onto
+// the exit portal's surface (Lengyel's oblique near plane). Hooked on the cameras' GetProjectionMatrix (slot 19 of
+// ICameraEntity); only our portal cameras change.
+namespace Oblique {
+    struct Cam {
+        float m_Plane[4] {}; // world plane, visible side positive
+        SMatrix44 m_Pristine {}, m_Written {};
+        bool m_Have = false;
+    };
+
+    std::mutex g_Mutex;
+    std::unordered_map<const ICameraEntity*, Cam> g_Cams;
+    using GetProj = SMatrix44*(__fastcall*)(ICameraEntity*);
+    GetProj g_Orig = nullptr;
+    void** g_Vt = nullptr;
+    std::atomic<float> g_LastHit {-1.f};
+    std::atomic<int> g_Bad {0};
+
+    float& At(SMatrix44& m, int r, int c) { return (&m.m11)[r * 4 + c]; }
+
+    // The rows of "clip = R_k . view" whichever way the matrix is stored; false when it isn't a perspective one.
+    bool Rows(SMatrix44& m, bool& p_ByCol, float R[4][4]) {
+        // A point 10 m ahead (view looks down -Z): w must be 10.
+        const float s_V[4] = {0.f, 0.f, -10.f, 1.f};
+
+        for (int t = 0; t < 2; ++t) {
+            for (int k = 0; k < 4; ++k)
+                for (int i = 0; i < 4; ++i)
+                    R[k][i] = t == 0 ? At(m, i, k) : At(m, k, i);
+
+            const float w = R[3][0] * s_V[0] + R[3][1] * s_V[1] + R[3][2] * s_V[2] + R[3][3] * s_V[3];
+
+            if (std::abs(w - 10.f) < 0.01f) {
+                p_ByCol = t == 0;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    float Dot(const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]; }
+
+    SMatrix44* __fastcall Hook(ICameraEntity* p_This) {
+        SMatrix44* m = g_Orig(p_This);
+        std::scoped_lock s_Lock(g_Mutex);
+        const auto it = g_Cams.find(p_This);
+
+        if (!m || it == g_Cams.end() || !it->second.m_Have)
+            return m;
+
+        Cam& c = it->second;
+
+        if (std::memcmp(m, &c.m_Written, sizeof(SMatrix44)) == 0)
+            *m = c.m_Pristine; // our own from last time: back to Hitman's first
+
+        c.m_Pristine = *m;
+        float R[4][4];
+        bool s_ByCol = false;
+
+        if (!Rows(*m, s_ByCol, R)) {
+            ++g_Bad;
+            return m;
+        }
+
+        // The exit plane in the camera's space (world = view * its matrix, row vectors).
+        auto* s_Cam = reinterpret_cast<ZCameraEntity*>(reinterpret_cast<uint8_t*>(p_This) - 0xD0);
+        const SMatrix w = s_Cam->GetObjectToWorldMatrix();
+        const float* P = c.m_Plane;
+        const auto s_D = [&](const float4& a) { return a.x * P[0] + a.y * P[1] + a.z * P[2]; };
+        const float C[4] = {s_D(w.XAxis), s_D(w.YAxis), s_D(w.ZAxis), s_D(w.Trans) + P[3]};
+
+        // Standard depth (near 0) or reversed (near 1): a point 1 m ahead against 1000 m.
+        const float s_Near[4] = {0.f, 0.f, -0.5f, 1.f}, s_Far[4] = {0.f, 0.f, -1000.f, 1.f};
+        const bool s_Rev = Dot(R[2], s_Near) / Dot(R[3], s_Near) > Dot(R[2], s_Far) / Dot(R[3], s_Far);
+
+        // The far corners (clip x, y = +-1 at the far depth), in view space: x = (cx w - R0 . (0,0,z,1)) / R0x etc.
+        // ponytail: assumes no skew (R0, R1 only x / y plus z jitter), true of a perspective projection.
+        const float s_Z = -std::max(1.f, p_This->GetFarZ());
+        float a = FLT_MAX;
+
+        for (int sx = -1; sx <= 1; sx += 2)
+            for (int sy = -1; sy <= 1; sy += 2) {
+                const float s_W = -s_Z;
+                const float q[4] = {(sx * s_W - R[0][2] * s_Z - R[0][3]) / R[0][0], (sy * s_W - R[1][2] * s_Z - R[1][3]) / R[1][1], s_Z, 1.f};
+
+                if (const float cq = Dot(C, q); cq > 1e-4f)
+                    a = std::min(a, Dot(R[3], q) / cq);
+            }
+
+        if (a == FLT_MAX || C[3] >= 0.f) // the camera on the visible side: nothing to cut
+            return m;
+
+        float N[4];
+
+        for (int i = 0; i < 4; ++i)
+            N[i] = s_Rev ? R[3][i] - a * C[i] : a * C[i];
+
+        for (int i = 0; i < 4; ++i)
+            (s_ByCol ? At(*m, i, 2) : At(*m, 2, i)) = N[i];
+
+        c.m_Written = *m;
+        g_LastHit = static_cast<float>(GetTickCount64() % 100000000) / 1000.f;
+        return m;
+    }
+
+    // Patches the vtable once; p_Plane is the exit's world plane (normal out, d).
+    void Set(ZCameraEntity* p_Cam, const float* p_Plane) {
+        ICameraEntity* i = p_Cam;
+        void** s_Vt = *reinterpret_cast<void***>(i);
+
+        if (g_Vt != s_Vt && !g_Vt) {
+            g_Vt = s_Vt;
+            g_Orig = static_cast<GetProj>(s_Vt[19]);
+            DWORD s_Old;
+            VirtualProtect(&s_Vt[19], sizeof(void*), PAGE_READWRITE, &s_Old);
+            InterlockedExchangePointer(&s_Vt[19], reinterpret_cast<void*>(&Hook));
+            VirtualProtect(&s_Vt[19], sizeof(void*), s_Old, &s_Old);
+            Logger::Info("[PortalGun] See-through: oblique near plane hooked.");
+        }
+
+        std::scoped_lock s_Lock(g_Mutex);
+        Cam& c = g_Cams[i];
+        std::copy_n(p_Plane, 4, c.m_Plane);
+        c.m_Have = true;
+    }
+
+    bool Working() {
+        const float s_Now = static_cast<float>(GetTickCount64() % 100000000) / 1000.f;
+        return g_LastHit >= 0.f && s_Now - g_LastHit < 1.f;
+    }
+}
 
 #include "PortalLog.h"
 #include "PortalViewJson.h"
@@ -2618,8 +2756,15 @@ void PortalGun::UpdateClone(ZHitman5* p_Hitman, const SMatrix& p_Trans) {
         static int s_Said = 0;
 
         if (s_Said++ < 3)
-            Logger::Warn("[PortalGun] Portal copy of 47 not posed: his animator {}, its {}, his pose {}, its {}.", s_Mine != nullptr,
-                m_CloneAnim != nullptr, s_Mine && Bones::Drawn(s_Mine, s_His), m_CloneAnim && Bones::Read(m_CloneAnim, s_Its));
+        {
+            const auto s_In = [&](const auto& p_List) {
+                return std::ranges::any_of(p_List, [&](const auto& e) { return e.m_pInterfaceRef == m_CloneActor; });
+            };
+            Logger::Warn("[PortalGun] Portal copy of 47 not posed: his animator {}, its {}, his pose {}, its {}; Hitman lists it "
+                "activated {}, enabled {}, disabled {}.", s_Mine != nullptr, m_CloneAnim != nullptr, s_Mine && Bones::Drawn(s_Mine, s_His),
+                m_CloneAnim && Bones::Read(m_CloneAnim, s_Its), s_In(Globals::ActorManager->m_activatedActors),
+                s_In(Globals::ActorManager->m_enabledActors), s_In(Globals::ActorManager->m_disabledActors));
+        }
 
         return;
     }
@@ -2737,7 +2882,19 @@ void PortalGun::UpdateViews(const ZEntityRef& p_Hitman) {
         // ponytail: flat near plane, an oblique projection would clip exactly at the exit's surface.
         const SVector3 s_Look = (ToVec3(s_Virtual.CameraBackward) * -1.f).Normalized();
         const float s_Depth = (ToVec3(s_Out.m_Transform.Trans) - ToVec3(s_Virtual.Trans)).Dot(s_Look);
-        s_View.m_Camera.m_entityRef.SetProperty("m_fNearZ", std::clamp(s_Depth - 0.1f, 0.05f, 100.f));
+        {
+            const SVector3 s_N = ToVec3(s_Out.m_Transform.YAxis).Normalized();
+            // 1 cm into the wall: the floor or wall right at the rim isn't cut.
+            const float s_Plane[4] = {s_N.x, s_N.y, s_N.z, -s_N.Dot(ToVec3(s_Out.m_Transform.Trans)) + 0.01f};
+            Oblique::Set(s_View.m_Camera.m_pInterfaceRef, s_Plane);
+        }
+
+        // The oblique plane does the cut once it's running; the flat one is the fallback.
+        s_View.m_Camera.m_entityRef.SetProperty("m_fNearZ", Oblique::Working() ? 0.05f : std::clamp(s_Depth - 0.1f, 0.05f, 100.f));
+        if (static bool s_Said = false; !s_Said && Oblique::Working())
+            s_Said = true, Logger::Info("[PortalGun] See-through: cut at the exit portal's surface (oblique).");
+        if (static bool s_Said2 = false; !s_Said2 && Oblique::g_Bad > 0)
+            s_Said2 = true, Logger::Warn("[PortalGun] See-through: the camera's projection isn't the shape expected; flat cut.");
         s_View.m_Camera.m_entityRef.SetProperty("m_fFovYDeg", s_Camera->GetFovYDeg());
         s_View.m_Camera.m_entityRef.SetProperty("m_fAspectWByH", m_ScreenW / std::max(1.f, m_ScreenH));
         s_View.m_Show = true;
