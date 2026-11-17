@@ -27,6 +27,8 @@ namespace Bones {
 
     // Its last animated pose (before any override), false before the game has posed it.
     bool Read(void* p_Animator, std::vector<SQV>& p_Local);
+    // What it's drawn with: the override if it has one, else Read's.
+    bool Drawn(void* p_Animator, std::vector<SQV>& p_Local);
 
     // A new game frame (passes are counted per frame).
     void Tick();

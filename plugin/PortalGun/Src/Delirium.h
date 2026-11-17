@@ -67,6 +67,7 @@ public:
 
     // 47 is down (ragdolled or getting up): his own movement is off.
     bool HitmanDown();
+    const void* m_Ignore = nullptr; // an actor that isn't a ped (the portal copy of 47)
     // 47's body as capsules: end a, end b, radius (7 floats each). Empty without a body.
     std::vector<std::array<float, 7>> HitmanCapsules();
     // 47 falling into a floor portal: the only time his body goes ragdoll (Billy); it goes through by itself.

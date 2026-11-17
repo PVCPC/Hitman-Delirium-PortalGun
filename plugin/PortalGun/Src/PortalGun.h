@@ -10,6 +10,9 @@
 #include "delirium_portal.h"
 #include "Delirium.h"
 
+class ZActor;
+class ZHitman5;
+
 #include <Glacier/ZCameraEntity.h>
 #include <Glacier/ZGeomEntity.h>
 #include <Glacier/ZResource.h>
@@ -236,6 +239,16 @@ private:
     const void* m_WalkIn = nullptr;
     float m_WalkInY = 0.f;
     SVector3 Wish();
+
+    // Portal 2's half-in look: a copy of 47 (an actor in his outfit) stood at the other portal, posed like him, while
+    // he's at one. Hidden 100 m under him otherwise.
+    ZEntityRef m_Clone;
+    ZActor* m_CloneActor = nullptr;
+    void* m_CloneAnim = nullptr;
+    std::vector<int> m_CloneMap; // its bone -> 47's (-1: its own)
+    const void* m_CloneKit = nullptr;
+    bool m_CloneFailed = false;
+    void UpdateClone(ZHitman5* p_Hitman, const SMatrix& p_Trans);
 
     // The portal gun item (SMF repository entry, see smf/PortalGun).
     ZRepositoryID m_GunId;

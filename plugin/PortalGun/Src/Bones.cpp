@@ -431,6 +431,17 @@ bool Bones::Read(void* p_Animator, std::vector<SQV>& p_Local) {
     return true;
 }
 
+bool Bones::Drawn(void* p_Animator, std::vector<SQV>& p_Local) {
+    std::scoped_lock s_Lock(g_Mutex);
+    const auto it = g_States.find(p_Animator);
+
+    if (it == g_States.end() || it->second.m_Anim.empty())
+        return false;
+
+    p_Local = it->second.m_Override.size() == it->second.m_Anim.size() ? it->second.m_Override : it->second.m_Anim;
+    return true;
+}
+
 std::vector<int32_t> Bones::Parents(void* p_Animator, int p_Bones) {
     const uint8_t* s_Data = BoneData(p_Animator);
 

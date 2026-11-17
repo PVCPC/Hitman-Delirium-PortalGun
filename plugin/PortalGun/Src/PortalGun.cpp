@@ -848,6 +848,7 @@ void PortalGun::OnFrameUpdate(const SGameUpdateEvent& p_UpdateEvent) {
     if (m_Blue.m_Placed && m_Orange.m_Placed && !m_Delirium.HitmanDown() && !TryTeleport(m_Blue, m_Orange, s_HitmanSpatial, s_Trans))
         TryTeleport(m_Orange, m_Blue, s_HitmanSpatial, s_Trans);
 
+    UpdateClone(s_LocalHitman.m_pInterfaceRef, s_Trans);
     UpdateViews(s_LocalHitman.m_entityRef);
 
     if (const auto s_Camera = Functions::GetCurrentCamera->Call()) {
@@ -2424,6 +2425,13 @@ void PortalGun::ClearPortals() {
 
 DEFINE_PLUGIN_DETOUR(PortalGun, void, OnClearScene, ZEntitySceneContext* th, bool p_FullyUnloadScene) {
     DeleteViews();
+    m_Clone = {};
+    m_CloneActor = nullptr;
+    m_CloneAnim = nullptr;
+    m_CloneMap.clear();
+    m_CloneKit = nullptr;
+    m_CloneFailed = false;
+    m_Delirium.m_Ignore = nullptr;
     m_Delirium.Clear();
     ClearPortals();
     m_GaveThisScene = false;
@@ -2502,6 +2510,115 @@ void PortalGun::SpawnViews() {
     }
 
     Logger::Info("[PortalGun] See-through portals: cameras up ({}x{}).", m_ScreenW, m_ScreenH);
+}
+
+void PortalGun::UpdateClone(ZHitman5* p_Hitman, const SMatrix& p_Trans) {
+    if (!p_Hitman || !m_Blue.m_Placed || !m_Orange.m_Placed)
+        return;
+
+    // Spawned once per level, the way Delirium spawns its NPCs (the NPC actor template).
+    if (!m_Clone && !m_CloneFailed) {
+        m_CloneFailed = true;
+        const auto s_Scene = Globals::Hitman5Module->m_pEntitySceneContext->m_pScene;
+        TResourcePtr<ZTemplateEntityFactory> s_Res;
+        Globals::ResourceManager->GetResourcePtr(
+            s_Res, ResId<"[assembly:/templates/gameplay/ai2/actors.template?/npcactor.entitytemplate].pc_entitytype">, 0);
+
+        if (!s_Scene || !s_Res) {
+            Logger::Warn("[PortalGun] Portal copy of 47: no NPC template in this level.");
+            return;
+        }
+
+        SExternalReferences s_Refs;
+        Functions::ZEntityManager_NewEntity->Call(Globals::EntityManager, m_Clone, "PortalCopy47", s_Res, s_Scene.m_entityRef, s_Refs, -1);
+        m_CloneActor = m_Clone ? m_Clone.QueryInterface<ZActor>() : nullptr;
+
+        if (!m_CloneActor) {
+            Logger::Warn("[PortalGun] Portal copy of 47: couldn't spawn the actor.");
+            m_Clone = {};
+            return;
+        }
+
+        m_CloneActor->m_sActorName = "PortalCopy47";
+        m_CloneActor->m_bStartEnabled = true;
+        m_CloneActor->m_eRequiredVoiceVariation = EActorVoiceVariation::eAVV_Undefined;
+        m_CloneActor->Activate(0);
+        m_Delirium.m_Ignore = m_CloneActor;
+        m_CloneFailed = false;
+        Logger::Info("[PortalGun] Portal copy of 47 spawned.");
+    }
+
+    if (!m_CloneActor)
+        return;
+
+    // Dressed in 47's outfit (its Actor variation, the one his cutscene double wears); again when he changes.
+    if (m_CloneKit != p_Hitman->m_rOutfitKit.m_pInterfaceRef && p_Hitman->m_rOutfitKit) {
+        m_CloneKit = p_Hitman->m_rOutfitKit.m_pInterfaceRef;
+        Functions::ZActor_SetOutfit->Call(
+            m_CloneActor, p_Hitman->m_rOutfitKit, p_Hitman->m_nOutfitCharset, p_Hitman->m_nOutfitVariation, false);
+        m_CloneAnim = nullptr;
+        Logger::Info("[PortalGun] Portal copy of 47 dressed (charset {}, variation {}).", p_Hitman->m_nOutfitCharset,
+            p_Hitman->m_nOutfitVariation);
+    }
+
+    const auto s_Spatial = m_Clone.QueryInterface<ZSpatialEntity>();
+
+    if (!s_Spatial)
+        return;
+
+    // At a portal: his chest within the oval, from 0.9 m in front of it to 0.6 m through.
+    const Portal* s_In = nullptr;
+
+    for (const Portal* p : {&m_Blue, &m_Orange}) {
+        const SVector3 l = ToLocal(p->m_Transform, ToVec3(p_Trans.Trans) + SVector3(0.f, 0.f, 1.f));
+
+        if (l.y > -0.6f && l.y < 0.9f && InsideOval(l, 0.3f))
+            s_In = p;
+    }
+
+    if (!s_In) {
+        SMatrix s_Hide = p_Trans;
+        s_Hide.Trans.z -= 100.f;
+        s_Spatial->SetObjectToWorldMatrixFromEditor(s_Hide);
+        return;
+    }
+
+    const Portal& s_Out = s_In == &m_Blue ? m_Orange : m_Blue;
+    s_Spatial->SetObjectToWorldMatrixFromEditor(MapThroughPortal(p_Trans, s_In->m_Transform, s_Out.m_Transform));
+
+    // His pose, bone by bone by name (his rig and an actor's aren't the same).
+    void* s_Mine = Bones::Animator(static_cast<ZHM5BaseCharacter*>(p_Hitman));
+
+    if (!m_CloneAnim)
+        m_CloneAnim = Bones::Animator(static_cast<ZHM5BaseCharacter*>(m_CloneActor));
+
+    std::vector<Bones::SQV> s_His, s_Its;
+
+    if (!s_Mine || !m_CloneAnim || !Bones::Drawn(s_Mine, s_His) || !Bones::Read(m_CloneAnim, s_Its))
+        return;
+
+    if (m_CloneMap.size() != s_Its.size()) {
+        std::string w1, w2;
+        const auto s_HisNames = Bones::Names(s_Mine, static_cast<int>(s_His.size()), w1);
+        const auto s_ItsNames = Bones::Names(m_CloneAnim, static_cast<int>(s_Its.size()), w2);
+        m_CloneMap.assign(s_Its.size(), -1);
+        int s_Matched = 0;
+
+        for (size_t i = 0; i < s_ItsNames.size() && i < s_Its.size(); ++i)
+            for (size_t j = 0; j < s_HisNames.size(); ++j)
+                if (_stricmp(s_ItsNames[i].c_str(), s_HisNames[j].c_str()) == 0) {
+                    m_CloneMap[i] = static_cast<int>(j), ++s_Matched;
+                    break;
+                }
+
+        Logger::Info("[PortalGun] Portal copy of 47: {} of its {} bones matched to his {}.", s_Matched, s_Its.size(), s_His.size());
+    }
+
+    for (size_t i = 0; i < s_Its.size(); ++i)
+        if (const int j = m_CloneMap[i]; j >= 0 && j < static_cast<int>(s_His.size()))
+            s_Its[i] = s_His[j];
+
+    Bones::Override(m_CloneAnim, std::move(s_Its));
 }
 
 void PortalGun::DeleteViews() {

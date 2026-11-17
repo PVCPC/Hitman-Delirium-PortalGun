@@ -2412,6 +2412,7 @@ void Delirium::UpdateNpcs(const Ray& p_Ray, const SVector3& p_Feet) {
     if (m_NpcMode && Globals::ActorManager) {
         for (const auto& s_Entry : Globals::ActorManager->m_activatedActors) {
             ZActor* s_Actor = s_Entry.m_pInterfaceRef;
+            if (s_Actor == m_Ignore) continue; // the portal copy of 47
             const auto s_Spatial = s_Entry.m_entityRef ? s_Entry.m_entityRef.QueryInterface<ZSpatialEntity>() : nullptr;
 
             if (!s_Actor || !s_Spatial)
@@ -2656,7 +2657,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     if (Globals::ActorManager)
         for (const auto& e : Globals::ActorManager->m_activatedActors)
-            if (ZActor* a = e.m_pInterfaceRef) {
+            if (ZActor* a = e.m_pInterfaceRef; a && a != m_Ignore) {
                 const bool s_Pac = a->IsPacified() && !a->IsDead();
                 bool& s_Was = m_Pacified[a];
 
@@ -2686,7 +2687,7 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     if (Globals::ActorManager)
         for (const auto& e : Globals::ActorManager->m_activatedActors)
-            if (ZActor* a = e.m_pInterfaceRef) {
+            if (ZActor* a = e.m_pInterfaceRef; a && a != m_Ignore) {
                 const float s_Hp = a->m_fCurrentHitPoints;
                 const auto it = m_Hp.find(a);
 
@@ -3574,6 +3575,7 @@ void Delirium::SpawnNpc(ZSpatialEntity* p_HitmanSpatial, const SVector3& p_Facin
 
     for (const auto& s_Entry : Globals::ActorManager->m_activatedActors) {
         ZActor* a = s_Entry.m_pInterfaceRef;
+        if (a == m_Ignore) continue; // the portal copy of 47
         const auto s_Spatial = s_Entry.m_entityRef ? s_Entry.m_entityRef.QueryInterface<ZSpatialEntity>() : nullptr;
 
         if (!a || !s_Spatial || a->IsDead())
