@@ -3020,6 +3020,11 @@ void PortalGun::DrawViews() {
         // with ImGui's font texture).
         ImGui::SetCursorScreenPos(ImVec2(0.f, 0.f));
         SDK()->ImGuiGameRenderTarget(s_Rt, ImVec2(1.f, 1.f));
+        // Billy 11-17: milky. Hitman now tone-maps it (m_bIsHDR off, m_bNeedsGamma on): drawn as is. Still a float
+        // HDR texture (26 = R11G11B10): the exposure slider's scale.
+        const auto s_Fmt = s_Rt->m_pTexture2D->m_pResource->GetDesc().Format;
+        const float s_Exp = s_Fmt == DXGI_FORMAT_R11G11B10_FLOAT || s_Fmt == DXGI_FORMAT_R16G16B16A16_FLOAT ? m_ViewExposure : 1.f;
+        const ImU32 s_Tint = ImGui::GetColorU32(ImVec4(s_Exp, s_Exp, s_Exp, 1.f));
         ImDrawList* s_List = ImGui::GetWindowDrawList();
         int s_Img = -1;
 
@@ -3053,7 +3058,7 @@ void PortalGun::DrawViews() {
                 // Billy 11-17: washed out white. The texture is the scene before Hitman's exposure (format 26,
                 // R11G11B10 float), so it's scaled down here, the one knob a draw has (no tone curve).
                 s_List->PrimQuadUV(s_P[i0], s_P[i1], s_P[i2], s_P[i3], uv(s_P[i0]), uv(s_P[i1]), uv(s_P[i2]), uv(s_P[i3]),
-                    ImGui::GetColorU32(ImVec4(m_ViewExposure, m_ViewExposure, m_ViewExposure, 1.f)));
+                    s_Tint);
             }
 
         // Move what went into the trailing command into the image's.

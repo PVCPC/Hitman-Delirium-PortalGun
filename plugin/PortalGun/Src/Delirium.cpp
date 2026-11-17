@@ -1888,6 +1888,16 @@ bool Delirium::Attach(ZHM5BaseCharacter* p_Char, ZSpatialEntity* p_Spatial, bool
         }
     }
 
+    // Billy 11-17: 47's upper chest came off him. Hitman has three spine bones to NM's four: Spine3 (where the
+    // shoulders hang) had none, so its bend all went into the neck and the chest stayed on Spine2. The top two
+    // spine bones move up one: the chest on Spine3, the middle on Spine2 (Spine1's bend goes into it).
+    if (std::ranges::find(s_Map, 10) == s_Map.end() && std::ranges::find(s_Map, 9) != s_Map.end()) {
+        for (int& m : s_Map)
+            m = m == 9 ? 10 : m == 8 ? 9 : m;
+
+        Logger::Info("[Delirium] {}: spine moved up one (chest on Spine3).", p_Name);
+    }
+
     std::fill(std::begin(b.m_PartRig), std::end(b.m_PartRig), -1);
 
     for (size_t r = 0; r < s_Map.size(); ++r)
@@ -2871,6 +2881,54 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
         Detach(*s_Far);
         m_Bodies.erase(s_Far);
     }
+
+    // Billy 11-17: a ped walked over a floor portal and didn't fall in: Hitman's animation walks him on the floor
+    // that's there. Feet in a floor portal's opening: his body, ragdolled, and NM's floor has the hole.
+    if (m_PortalsOpen && Globals::ActorManager)
+        for (const auto& e : Globals::ActorManager->m_activatedActors) {
+            ZActor* a = e.m_pInterfaceRef;
+            const auto s_Sp = a && a != m_Ignore && !a->IsDead() && e.m_entityRef ? e.m_entityRef.QueryInterface<ZSpatialEntity>() : nullptr;
+
+            if (!s_Sp)
+                continue;
+
+            const float4 t = s_Sp->GetObjectToWorldMatrix().Trans;
+            const float s_Feet[3] = {t.x, t.y, t.z};
+            bool s_Over = false;
+
+            for (int i = 0; i < 2 && !s_Over; ++i) {
+                const DpFrame& f = m_Portals[i];
+                const float z = dp_local_z(&f, &s_Feet);
+
+                if (Rotate(f.rot, SVector3(0.f, 0.f, 1.f)).z < 0.7f || z < -0.3f || z > 0.3f)
+                    continue;
+
+                // His feet on the plane, pulled in 0.75 toward the middle: well inside the opening, not on the rim.
+                const float s_On[3] = {f.at[0] + (t.x - f.at[0]) / 0.75f, f.at[1] + (t.y - f.at[1]) / 0.75f, f.at[2] - 0.05f};
+                s_Over = dp_crossed(&f, 1.f, &s_On);
+            }
+
+            if (!s_Over)
+                continue;
+
+            Body* s_B = nullptr;
+
+            for (Body& b : m_Bodies)
+                if (b.m_Char == static_cast<void*>(a))
+                    s_B = &b;
+
+            if (!s_B && m_Bodies.size() < c_MaxMeshes - 1) {
+                const ZGlobalOutfitKit* s_Outfit = a->m_rOutfit.m_pInterfaceRef;
+
+                if (Attach(a, s_Sp, true, s_Outfit && s_Outfit->m_bIsFemale, p_Ray, std::string(a->m_sActorName.c_str(), a->m_sActorName.size())))
+                    s_B = &m_Bodies.back();
+            }
+
+            if (s_B && !s_B->m_Ragdoll) {
+                SetRagdoll(*s_B, true);
+                Logger::Info("[Delirium] {} walked onto a floor portal: falls in.", s_B->m_Name);
+            }
+        }
 
     for (void* c : s_Hits) {
         // Billy: shot from afar (past the 15 m / 6 NPCs that get bodies), it reacted as Hitman's. Its body now.

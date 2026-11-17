@@ -79,6 +79,46 @@ inline constexpr const char* c_PortalViewJson = R"(
                     "type": "bool",
                     "value": false
                 },
+                "m_bIsHDR": {
+                    "type": "bool",
+                    "value": false
+                },
+                "m_bNeedsGamma": {
+                    "type": "bool",
+                    "value": true
+                },
+                "m_bDrawShadows": {
+                    "type": "bool",
+                    "value": true
+                },
+                "m_bDrawCrowds": {
+                    "type": "bool",
+                    "value": true
+                },
+                "m_bDrawWater": {
+                    "type": "bool",
+                    "value": true
+                },
+                "m_bDrawDecals": {
+                    "type": "bool",
+                    "value": true
+                },
+                "m_bDrawScatter": {
+                    "type": "bool",
+                    "value": true
+                },
+                "m_bDrawTransparent": {
+                    "type": "bool",
+                    "value": true
+                },
+                "m_bDrawRefractions": {
+                    "type": "bool",
+                    "value": true
+                },
+                "m_bDrawAtmosphericScattering": {
+                    "type": "bool",
+                    "value": true
+                },
                 "m_bDrawGates": {
                     "type": "bool",
                     "value": true
