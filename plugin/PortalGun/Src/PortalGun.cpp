@@ -2471,9 +2471,10 @@ void PortalGun::SpawnViews() {
     const auto s_Put = [&](const char* p_Key, uint32_t p_Value) {
         s_Json.replace(s_Json.find(p_Key), std::strlen(p_Key), std::to_string(p_Value));
     };
-    s_Put("@W@", std::max(64u, static_cast<uint32_t>(m_ScreenW * 0.5f)));
+    // Billy 11-17: "glitchy": half the screen's pixels, stretched over a portal up close. Full screen size.
+    s_Put("@W@", std::max(64u, static_cast<uint32_t>(m_ScreenW * 1.f)));
     s_Put("@PIP@", m_CornerPicture ? 1u : 0u);
-    s_Put("@H@", std::max(64u, static_cast<uint32_t>(m_ScreenH * 0.5f)));
+    s_Put("@H@", std::max(64u, static_cast<uint32_t>(m_ScreenH * 1.f)));
 
     if (!m_ViewFactory && !SDK()->LoadQnEntity(ZString(s_Json), m_ViewBlueprint, m_ViewFactory)) {
         Logger::Error("[PortalGun] See-through portals: couldn't load the camera entity.");

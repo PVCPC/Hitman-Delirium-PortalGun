@@ -3327,6 +3327,20 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
 
     // Down and still for a moment: up again (the dead stay down).
     for (Body& b : m_Bodies) {
+        // Billy 11-17: an extinguisher knocked him out in Hitman and his body stood balancing: none of the throw
+        // checks caught it (no ragdoll, a hit-point drop read as a shot). Whatever did it: Hitman has him unconscious,
+        // his body goes out too.
+        if (!b.m_Ko && b.m_Npc && !b.m_Dead) {
+            ZActor* s_A = static_cast<ZActor*>(b.m_Char);
+
+            if (s_A->IsPacified() && !s_A->IsDead()) {
+                SetRagdoll(b, true);
+                b.m_Ko = true;
+                b.m_KoT = 1.f;
+                Logger::Info("[Delirium] {}: unconscious in Hitman; out cold.", b.m_Name);
+            }
+        }
+
         if (!b.m_Ragdoll || b.m_Dead) {
             b.m_GettingUp = false;
             b.m_SettledT = 0.f;
