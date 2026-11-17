@@ -494,6 +494,7 @@ bool Delirium::Start() {
     nm_set_step_limit(0);
     m_World = nm_world_create();
     nm_set_step_limit(0); // the Playroom's default: balance keeps stepping as long as it takes
+    nm_set_get_up_needs_floor(1); // no get-up with no floor under his hips (a floor portal's hole)
     nm_set_carry_pushes(1); // we move bodies ourselves (follow, portals): off, a shot spins and flings them
 
     for (int i = 0; i < nm_build_part_count(m_Build); ++i) {
@@ -2214,12 +2215,18 @@ void Delirium::Transit(Body& b, int i) {
         nm_agent_set_part_state(b.m_Agent, k, s_P, s_Q, s_V, s_W);
     }
 
-    // Out in front of the other one: a body sent through while lying on the rim (its middle not under the plane)
-    // would come out behind that surface, in the wall.
-    nm_agent_get_com(b.m_Agent, s_Com, s_Vel);
+    // Out in front of the other one: a body sent through while lying on the rim comes out partly behind that
+    // surface, in the wall. Every part moved out by the deepest one's depth plus a capsule (Pelican's).
+    float s_Deep = 0.f;
 
-    if (const float z = dp_local_z(&s_To, &s_Com); z < 0.4f) {
-        const SVector3 n = Rotate(s_To.rot, SVector3(0.f, 0.f, 1.f)) * (0.4f - z);
+    for (int k = 0; k < s_Parts; ++k) {
+        float s_P[3], s_Q[4];
+        nm_agent_get_part_transform(b.m_Agent, k, s_P, s_Q);
+        s_Deep = std::min(s_Deep, dp_local_z(&s_To, &s_P));
+    }
+
+    if (s_Deep < 0.f) {
+        const SVector3 n = Rotate(s_To.rot, SVector3(0.f, 0.f, 1.f)) * (0.12f - s_Deep);
 
         for (int k = 0; k < s_Parts; ++k) {
             float s_P[3], s_Q[4], s_V[3], s_W[3];
@@ -3352,6 +3359,9 @@ void Delirium::Update(float p_Dt, const Ray& p_Ray, const SVector3& p_Eye, const
             const bool s_Out = b.m_Npc && static_cast<ZActor*>(b.m_Char)->IsPacified();
 
             if (!b.m_KoOut && (b.m_KoT > 0.6f || (s_Out && b.m_KoT > 0.15f))) { // knocked out in Hitman: out at once
+                // Pelican's knocked-out recipe: set_dead only blocks reactions; stop and relax make him limp.
+                nm_msg_send_text(b.m_Agent, m_World, "stopAllBehaviours");
+                nm_msg_send_text(b.m_Agent, m_World, "bodyRelax start=true relaxation=100");
                 nm_agent_set_dead(b.m_Agent, 1);
                 b.m_KoOut = true;
                 Logger::Info("[Delirium] {}: out cold, falls.", b.m_Name);

@@ -170,3 +170,4 @@ Status: **open**, **built** (in the game, not yet confirmed by Billy), **confirm
 | 13 | (11-17) copy of 47 never posed | Log: its animator never updated (100 m underground). Now parked 2 m behind a portal's wall instead. Built, untested. |
 | 125 | (11-17) Delirium dll | Pelican's rebuilt gta4nm.dll (get-up when nearly still) installed. |
 | 126 | (11-17) correction | A can, extinguisher or hammer to the head = Hitman knocks him out until woken. The close throw was left out (2.5 m rule meant for chokes/punches): now 1.2 m. Knocked out in Hitman: limp at once (0.15 s), down until Hitman wakes him. Built, untested. |
+| 126 | (11-17) Pelican recipe | Knocked out: stopAllBehaviours + bodyRelax 100 + set_dead (set_dead alone kept him stiff). nm_set_get_up_needs_floor on (no get-up without floor under the hips). Portal exit: parts moved out by the deepest part's depth + 0.12 m. Delirium 19:29 dll installed. Built, untested. |
